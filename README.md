@@ -35,6 +35,12 @@
 | 축약/번들 옵션 (`-Fn`, `-dFn`) | - | - | ✅ |
 | 컬러 출력 (메인/잠금/prunable 강조) | 일부 | - | ✅ |
 
+## 요구사항
+
+- **git** (필수)
+- **bash** 3.2+ (macOS/Linux 기본 탑재)
+- **claude** CLI (PATH에 있어야 `cw add`/`open` 기본 동작 — `--no-open`으로 우회 가능)
+
 ## 설치
 
 ### Homebrew (권장)
