@@ -4,7 +4,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-CW_VERSION="0.1.3"
+CW_VERSION="0.1.4"
 WORKTREE_BASE=".claude/worktrees"
 INIT_HOOK="${HOME}/.claude/worktree-init.sh"
 
@@ -73,7 +73,13 @@ EOF
 }
 
 require_repo() {
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || { err "git repo 아님"; exit 1; }
+  # linked worktree 안에서도 항상 메인 워크트리(repo root)를 기준으로 동작
+  git rev-parse --git-dir >/dev/null 2>&1 || { err "git repo 아님"; exit 1; }
+  REPO_ROOT="$(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print $2; exit}')"
+  if [ -z "$REPO_ROOT" ] || [ ! -d "$REPO_ROOT" ]; then
+    err "메인 워크트리 경로 감지 실패"
+    exit 1
+  fi
 }
 
 require_claude() {
