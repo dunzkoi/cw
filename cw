@@ -4,6 +4,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+CW_VERSION="0.1.2"
 WORKTREE_BASE=".claude/worktrees"
 INIT_HOOK="${HOME}/.claude/worktree-init.sh"
 
@@ -25,7 +26,7 @@ skip() { echo "${C_GRAY}·${C_RESET} ${C_DIM}$*${C_RESET}"; }
 
 help() {
   cat <<EOF
-${C_BOLD}cw — Claude Worktree${C_RESET}
+${C_BOLD}cw — Claude Worktree${C_RESET} ${C_DIM}v${CW_VERSION}${C_RESET}
 
 ${C_BOLD}Commands:${C_RESET}
   ${C_CYAN}add${C_RESET} <folder> [branch] [base] [옵션]
@@ -40,6 +41,7 @@ ${C_BOLD}Commands:${C_RESET}
   ${C_CYAN}move${C_RESET} <name> <new-name>          워크트리 이름 변경
   ${C_CYAN}prune${C_RESET} [base]                    stale 참조 정리 (기본: 메인 워크트리의 현재 브랜치)
   ${C_CYAN}repair${C_RESET}                          워크트리 링크 복구 (레포 이동 후)
+  ${C_CYAN}version${C_RESET}                         버전 출력
   ${C_CYAN}help${C_RESET}                            이 도움말
 
 ${C_BOLD}Arguments (add):${C_RESET}
@@ -627,6 +629,7 @@ case "${1:-help}" in
   move)   shift; cmd_move "$@" ;;
   prune)  shift; cmd_prune "$@" ;;
   repair) cmd_repair ;;
+  version|--version|-V) echo "cw ${CW_VERSION}" ;;
   help|--help|-h) help ;;
   *)      err "알 수 없는 명령: $1"; help ;;
 esac
