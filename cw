@@ -400,6 +400,18 @@ cmd_remove() {
     exit 1
   fi
 
+  # 머지 여부 선검증: 워크트리 제거 후 브랜치 삭제만 실패하는 반쪽 상태 방지
+  if [ -n "$branch" ] && [ "$opt_force" -eq 0 ]; then
+    local base_br
+    base_br="$(merge_base_branch)"
+    if [ -n "$base_br" ] && [ "$base_br" != "$branch" ] \
+       && ! git branch --merged "$base_br" 2>/dev/null | grep -qw "$branch"; then
+      warn "브랜치 ${C_CYAN}${branch}${C_RESET} 머지 안 됨 (${C_CYAN}${base_br}${C_RESET} 기준) — 워크트리 유지"
+      hint "강제 삭제하려면: ${C_CYAN}cw remove ${name} -f${C_RESET}"
+      exit 1
+    fi
+  fi
+
   # dirty 체크 통과 후에는 --force 필수:
   # - .claude-worktree-keep 같은 화이트리스트 파일이 남아있으면 git은 거부함
   # - 사용자 dirty 체크로 이미 안전성 판단됨
@@ -409,7 +421,7 @@ cmd_remove() {
     if [ "$opt_force" -eq 1 ]; then
       git branch -D "$branch" 2>/dev/null || true
     else
-      git branch -d "$branch" 2>/dev/null || warn "브랜치 ${C_CYAN}${branch}${C_RESET} 삭제 실패 (머지 안 됨). ${C_CYAN}git branch -D ${branch}${C_RESET}로 강제 삭제 가능"
+      git branch -d "$branch" 2>/dev/null || warn "브랜치 ${C_CYAN}${branch}${C_RESET} 삭제 실패. ${C_CYAN}git branch -D ${branch}${C_RESET}로 강제 삭제 가능"
     fi
   fi
 
