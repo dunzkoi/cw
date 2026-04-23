@@ -4,7 +4,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-CW_VERSION="0.1.4"
+CW_VERSION="0.1.5"
 WORKTREE_BASE=".claude/worktrees"
 INIT_HOOK="${HOME}/.claude/worktree-init.sh"
 
@@ -450,18 +450,52 @@ cmd_clean() {
   info "기준 브랜치: ${C_CYAN}${default_br}${C_RESET}"
   echo ""
 
-  local cleaned=0 skipped=0
-  local -a kept_unmerged=()
-
+  # 워크트리 목록 먼저 수집 (총 개수 파악)
+  local -a wtpaths=()
   while IFS= read -r wtpath; do
     [ -n "$wtpath" ] || continue
     [ -d "$wtpath" ] || continue
-    local name branch
+    wtpaths+=("$wtpath")
+  done < <(list_worktree_dirs "$wbase")
+
+  local total=${#wtpaths[@]}
+  if [ "$total" -eq 0 ]; then
+    warn "정리할 워크트리 없음"
+    exit 0
+  fi
+
+  local is_tty=0
+  [ -t 1 ] && is_tty=1
+
+  # 머지된 브랜치 목록을 한 번만 조회 (워크트리마다 git 호출 방지 — 큰 레포에서 속도 체감)
+  if [ "$is_tty" -eq 1 ]; then
+    printf '%s머지된 브랜치 조회 중...%s' "$C_DIM" "$C_RESET"
+  fi
+  local merged_list
+  merged_list="$(git branch --merged "$default_br" 2>/dev/null | awk '{print $NF}')"
+  if [ "$is_tty" -eq 1 ]; then
+    printf '\r\033[K'
+  fi
+
+  local cleaned=0 skipped=0
+  local -a kept_unmerged=()
+  local idx=0
+
+  for wtpath in "${wtpaths[@]}"; do
+    idx=$((idx + 1))
+    local name branch prefix
     name="$(basename "$wtpath")"
     branch="$(git -C "$wtpath" branch --show-current 2>/dev/null || true)"
+    prefix="${C_DIM}[${idx}/${total}]${C_RESET}"
+
+    # 진행 표시: TTY일 때만 덮어쓰기 가능한 "확인 중" 라인
+    if [ "$is_tty" -eq 1 ]; then
+      printf '\r\033[K%s[%d/%d] 확인 중: %s...%s' "$C_DIM" "$idx" "$total" "$name" "$C_RESET"
+    fi
 
     if is_locked "$wtpath"; then
-      skip "유지: ${name} ${branch:+(${branch}) }— 잠금됨"
+      [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+      skip "${prefix} 유지: ${name} ${branch:+(${branch}) }— 잠금됨"
       skipped=$((skipped + 1))
       continue
     fi
@@ -470,41 +504,48 @@ cmd_clean() {
     if [ -z "$branch" ]; then
       local head_sha
       head_sha="$(git -C "$wtpath" rev-parse HEAD 2>/dev/null || true)"
+      [ "$is_tty" -eq 1 ] && printf '\r\033[K'
       if [ -z "$head_sha" ]; then
-        skip "유지: ${name} — HEAD 해석 실패"
+        skip "${prefix} 유지: ${name} — HEAD 해석 실패"
         skipped=$((skipped + 1))
         continue
       fi
       if git merge-base --is-ancestor "$head_sha" "$default_br" 2>/dev/null; then
         if git worktree remove "$wtpath" --force 2>/dev/null; then
-          ok "정리: ${C_BOLD}${name}${C_RESET} (${C_DIM}detached ${head_sha:0:10}${C_RESET}) — ${default_br}에 포함됨"
+          ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} (${C_DIM}detached ${head_sha:0:10}${C_RESET}) — ${default_br}에 포함됨"
           cleaned=$((cleaned + 1))
         else
-          err "유지: ${name} (detached) — 제거 실패"
+          err "${prefix} 유지: ${name} (detached) — 제거 실패"
           skipped=$((skipped + 1))
         fi
       else
-        skip "유지: ${name} — detached HEAD (${head_sha:0:10}) 미포함"
+        skip "${prefix} 유지: ${name} — detached HEAD (${head_sha:0:10}) 미포함"
         skipped=$((skipped + 1))
       fi
       continue
     fi
 
-    if git branch --merged "$default_br" 2>/dev/null | grep -qw "$branch"; then
+    # 미리 계산한 merged_list에서 조회 (O(N) → O(1) 스케일의 체감 개선)
+    if printf '%s\n' "$merged_list" | grep -qFx "$branch"; then
+      [ "$is_tty" -eq 1 ] && printf '\r\033[K'
       if git worktree remove "$wtpath" --force 2>/dev/null; then
         git branch -D "$branch" 2>/dev/null || true
-        ok "정리: ${C_BOLD}${name}${C_RESET} (${C_DIM}${branch}${C_RESET}) — ${default_br}에 머지됨"
+        ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} (${C_DIM}${branch}${C_RESET}) — ${default_br}에 머지됨"
         cleaned=$((cleaned + 1))
       else
-        err "유지: ${name} (${branch}) — 제거 실패"
+        err "${prefix} 유지: ${name} (${branch}) — 제거 실패"
         skipped=$((skipped + 1))
       fi
     else
+      [ "$is_tty" -eq 1 ] && printf '\r\033[K'
       skipped=$((skipped + 1))
       kept_unmerged+=("${name}|${branch}")
-      skip "유지: ${name} (${branch}) — 머지 안 됨"
+      skip "${prefix} 유지: ${name} (${branch}) — 머지 안 됨"
     fi
-  done < <(list_worktree_dirs "$wbase")
+  done
+
+  # 진행 라인 잔여 정리
+  [ "$is_tty" -eq 1 ] && printf '\r\033[K'
 
   git worktree prune 2>/dev/null
   echo ""
