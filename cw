@@ -4,7 +4,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-CW_VERSION="0.1.5"
+CW_VERSION="0.1.6"
 WORKTREE_BASE=".claude/worktrees"
 INIT_HOOK="${HOME}/.claude/worktree-init.sh"
 
@@ -424,6 +424,8 @@ cmd_remove() {
   # - .claude-worktree-keep 같은 화이트리스트 파일이 남아있으면 git은 거부함
   # - 사용자 dirty 체크로 이미 안전성 판단됨
   git worktree remove "$wpath" --force || { err "제거 실패: ${name}"; exit 1; }
+  # 디렉토리 잔존 대비 (turbo daemon 등 외부 프로세스가 파일 재생성하는 경우)
+  [ -d "$wpath" ] && rm -rf "$wpath"
 
   if [ -n "$branch" ]; then
     if [ "$opt_force" -eq 1 ]; then
@@ -471,8 +473,10 @@ cmd_clean() {
   if [ "$is_tty" -eq 1 ]; then
     printf '%s머지된 브랜치 조회 중...%s' "$C_DIM" "$C_RESET"
   fi
-  local merged_list
+  local merged_list registered_list
   merged_list="$(git branch --merged "$default_br" 2>/dev/null | awk '{print $NF}')"
+  # git에 등록된 워크트리 경로 — 여기에 없는데 .claude/worktrees/* 에 있으면 stray
+  registered_list="$(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print $2}')"
   if [ "$is_tty" -eq 1 ]; then
     printf '\r\033[K'
   fi
@@ -491,6 +495,15 @@ cmd_clean() {
     # 진행 표시: TTY일 때만 덮어쓰기 가능한 "확인 중" 라인
     if [ "$is_tty" -eq 1 ]; then
       printf '\r\033[K%s[%d/%d] 확인 중: %s...%s' "$C_DIM" "$idx" "$total" "$name" "$C_RESET"
+    fi
+
+    # stray: git에 등록 안 된 디렉토리 (이전 remove 후 turbo/vite 등이 재생성한 껍데기)
+    if ! printf '%s\n' "$registered_list" | grep -qFx "$wtpath"; then
+      [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+      rm -rf "$wtpath"
+      ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} ${C_DIM}(stray 디렉토리 — git 등록 없음)${C_RESET}"
+      cleaned=$((cleaned + 1))
+      continue
     fi
 
     if is_locked "$wtpath"; then
@@ -512,6 +525,7 @@ cmd_clean() {
       fi
       if git merge-base --is-ancestor "$head_sha" "$default_br" 2>/dev/null; then
         if git worktree remove "$wtpath" --force 2>/dev/null; then
+          [ -d "$wtpath" ] && rm -rf "$wtpath"
           ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} (${C_DIM}detached ${head_sha:0:10}${C_RESET}) — ${default_br}에 포함됨"
           cleaned=$((cleaned + 1))
         else
@@ -529,6 +543,7 @@ cmd_clean() {
     if printf '%s\n' "$merged_list" | grep -qFx "$branch"; then
       [ "$is_tty" -eq 1 ] && printf '\r\033[K'
       if git worktree remove "$wtpath" --force 2>/dev/null; then
+        [ -d "$wtpath" ] && rm -rf "$wtpath"
         git branch -D "$branch" 2>/dev/null || true
         ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} (${C_DIM}${branch}${C_RESET}) — ${default_br}에 머지됨"
         cleaned=$((cleaned + 1))
