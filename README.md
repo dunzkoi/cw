@@ -1,5 +1,11 @@
 # cw — Claude Worktree
 
+![Release](https://img.shields.io/github/v/release/dunzkoi/cw?color=black)
+![License](https://img.shields.io/github/license/dunzkoi/cw?color=blue)
+![Homebrew](https://img.shields.io/badge/install-brew-orange)
+![Bash](https://img.shields.io/badge/bash-5%2B-4EAA25)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+
 `git worktree` + `claude -w`를 대체하는 CLI. 워크트리 생성부터 claude 실행, 잠금, 일괄 정리까지 서브커맨드로 관리.
 
 ## 만든 이유
