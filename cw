@@ -4,7 +4,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-CW_VERSION="0.1.6"
+CW_VERSION="0.1.7"
 WORKTREE_BASE=".claude/worktrees"
 INIT_HOOK="${HOME}/.claude/worktree-init.sh"
 
@@ -452,31 +452,62 @@ cmd_clean() {
   info "기준 브랜치: ${C_CYAN}${default_br}${C_RESET}"
   echo ""
 
-  # 워크트리 목록 먼저 수집 (총 개수 파악)
-  local -a wtpaths=()
-  while IFS= read -r wtpath; do
-    [ -n "$wtpath" ] || continue
-    [ -d "$wtpath" ] || continue
-    wtpaths+=("$wtpath")
-  done < <(list_worktree_dirs "$wbase")
+  local is_tty=0
+  [ -t 1 ] && is_tty=1
 
-  local total=${#wtpaths[@]}
+  # 등록된 워크트리 (wbase 하위) — git이 진실의 원천. 중첩 경로(fix/ceoapp)도 그대로 인식
+  # porcelain 한 번에 파싱: path / branch / prunable 매핑 구축
+  # (워크트리별 git -C 호출이 부모 워크트리로 walk up 하는 사고 방지)
+  local -a registered=() reg_branches=() reg_prunable=()
+  local _cur_path="" _cur_branch="" _cur_prunable=0
+  _flush_wt() {
+    [ -n "$_cur_path" ] || return 0
+    case "$_cur_path" in "$wbase"/*)
+      registered+=("$_cur_path")
+      reg_branches+=("$_cur_branch")
+      reg_prunable+=("$_cur_prunable")
+    ;; esac
+    _cur_path=""; _cur_branch=""; _cur_prunable=0
+  }
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*)        _flush_wt; _cur_path="${line#worktree }" ;;
+      "branch refs/heads/"*) _cur_branch="${line#branch refs/heads/}" ;;
+      "detached")          _cur_branch="" ;;
+      "prunable"*)         _cur_prunable=1 ;;
+    esac
+  done < <(git worktree list --porcelain 2>/dev/null)
+  _flush_wt
+  unset -f _flush_wt
+
+  # stray = wbase 직속 디렉토리 중 등록된 워크트리의 부모도 자기 자신도 아닌 것
+  # 예) fix/ceoapp가 등록돼 있으면 fix/는 stray가 아님 (부모이므로)
+  local -a strays=()
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    [ -d "$dir" ] || continue
+    local is_parent_or_self=0 r
+    for r in "${registered[@]+"${registered[@]}"}"; do
+      if [ "$r" = "$dir" ] || [[ "$r" == "$dir"/* ]]; then
+        is_parent_or_self=1
+        break
+      fi
+    done
+    [ "$is_parent_or_self" -eq 0 ] && strays+=("$dir")
+  done < <(find "$wbase" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+
+  local total=$((${#registered[@]} + ${#strays[@]}))
   if [ "$total" -eq 0 ]; then
     warn "정리할 워크트리 없음"
     exit 0
   fi
 
-  local is_tty=0
-  [ -t 1 ] && is_tty=1
-
   # 머지된 브랜치 목록을 한 번만 조회 (워크트리마다 git 호출 방지 — 큰 레포에서 속도 체감)
   if [ "$is_tty" -eq 1 ]; then
     printf '%s머지된 브랜치 조회 중...%s' "$C_DIM" "$C_RESET"
   fi
-  local merged_list registered_list
+  local merged_list
   merged_list="$(git branch --merged "$default_br" 2>/dev/null | awk '{print $NF}')"
-  # git에 등록된 워크트리 경로 — 여기에 없는데 .claude/worktrees/* 에 있으면 stray
-  registered_list="$(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print $2}')"
   if [ "$is_tty" -eq 1 ]; then
     printf '\r\033[K'
   fi
@@ -485,11 +516,30 @@ cmd_clean() {
   local -a kept_unmerged=()
   local idx=0
 
-  for wtpath in "${wtpaths[@]}"; do
+  # 1) stray 디렉토리 (git 등록 없음) — 단순 rm
+  for wtpath in "${strays[@]+"${strays[@]}"}"; do
     idx=$((idx + 1))
-    local name branch prefix
-    name="$(basename "$wtpath")"
-    branch="$(git -C "$wtpath" branch --show-current 2>/dev/null || true)"
+    local name prefix
+    name="${wtpath#"$wbase"/}"
+    prefix="${C_DIM}[${idx}/${total}]${C_RESET}"
+    if [ "$is_tty" -eq 1 ]; then
+      printf '\r\033[K%s[%d/%d] 정리 중: %s...%s' "$C_DIM" "$idx" "$total" "$name" "$C_RESET"
+    fi
+    rm -rf "$wtpath"
+    [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+    ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} ${C_DIM}(stray 디렉토리 — git 등록 없음)${C_RESET}"
+    cleaned=$((cleaned + 1))
+  done
+
+  # 2) 등록된 워크트리 처리
+  local i_reg=-1
+  for wtpath in "${registered[@]+"${registered[@]}"}"; do
+    i_reg=$((i_reg + 1))
+    idx=$((idx + 1))
+    local name branch prunable prefix
+    name="${wtpath#"$wbase"/}"
+    branch="${reg_branches[$i_reg]}"
+    prunable="${reg_prunable[$i_reg]}"
     prefix="${C_DIM}[${idx}/${total}]${C_RESET}"
 
     # 진행 표시: TTY일 때만 덮어쓰기 가능한 "확인 중" 라인
@@ -497,11 +547,12 @@ cmd_clean() {
       printf '\r\033[K%s[%d/%d] 확인 중: %s...%s' "$C_DIM" "$idx" "$total" "$name" "$C_RESET"
     fi
 
-    # stray: git에 등록 안 된 디렉토리 (이전 remove 후 turbo/vite 등이 재생성한 껍데기)
-    if ! printf '%s\n' "$registered_list" | grep -qFx "$wtpath"; then
+    # prunable: git 내부 메타데이터는 살아있지만 워크트리 .git 파일이 사라진 상태
+    # → 디렉토리 정리하고 git worktree prune이 메타데이터 정리하게 둠
+    if [ "$prunable" = "1" ]; then
       [ "$is_tty" -eq 1 ] && printf '\r\033[K'
-      rm -rf "$wtpath"
-      ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} ${C_DIM}(stray 디렉토리 — git 등록 없음)${C_RESET}"
+      [ -d "$wtpath" ] && rm -rf "$wtpath"
+      ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} ${C_DIM}(prunable — git 등록 메타데이터만 잔존)${C_RESET}"
       cleaned=$((cleaned + 1))
       continue
     fi
@@ -561,6 +612,9 @@ cmd_clean() {
 
   # 진행 라인 잔여 정리
   [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+
+  # 중첩 워크트리(fix/ceoapp) 제거 후 비게 된 부모 디렉토리(fix/) 정리
+  find "$wbase" -mindepth 1 -depth -type d -empty -delete 2>/dev/null || true
 
   git worktree prune 2>/dev/null
   echo ""
