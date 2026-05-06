@@ -6,6 +6,12 @@
 set -u
 IFS=$'\n\t'
 
+# pre-commit 훅 등 git 호출 컨텍스트 격리:
+# git이 export하는 GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE 등이 남아 있으면
+# 임시 repo 안의 git 명령이 부모 cw 레포를 가리켜 테스트가 전부 깨짐.
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_OBJECT_DIRECTORY \
+      GIT_COMMON_DIR GIT_PREFIX GIT_NAMESPACE GIT_REFLOG_ACTION 2>/dev/null || true
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CW="${SCRIPT_DIR}/cw"
 
