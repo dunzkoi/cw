@@ -304,10 +304,25 @@ t_remove_unmerged_refused() {
 t_clean_merged_removed() {
   local r="$1"
   cw_run "$r" add cm1 -n >/dev/null 2>&1
-  # 워크트리 추가 시점 HEAD == main HEAD → main에 머지된 것으로 간주
+  local wp="$r/.claude/worktrees/cm1"
+  # 워크트리에서 작업 후 main으로 fast-forward 머지 → 진짜 머지된 상태
+  echo c > "$wp/c.txt"
+  git -C "$wp" add c.txt
+  git -C "$wp" commit -q -m "c"
+  git -C "$r" merge --ff-only worktrees-cm1 -q
   cw_run "$r" clean >/dev/null 2>&1
   assert_dir_missing "$r/.claude/worktrees/cm1" "clean — 머지된 워크트리 삭제"
   assert_branch_missing "$r" "worktrees-cm1" "clean — 머지된 브랜치 삭제"
+}
+
+# 회귀 테스트: cw add 후 작업 시작 안 한 워크트리 (HEAD == base) 자동 삭제 방지
+t_clean_skips_untouched_branch() {
+  local r="$1"
+  cw_run "$r" add untouched -n >/dev/null 2>&1
+  # 추가만 하고 commit 없음 → 브랜치 HEAD == main HEAD
+  cw_run "$r" clean >/dev/null 2>&1
+  assert_dir_exists "$r/.claude/worktrees/untouched" "[회귀] clean — 미작업 워크트리 보존 (HEAD==base)"
+  assert_branch_exists "$r" "worktrees-untouched" "[회귀] clean — 미작업 브랜치 보존"
 }
 
 t_clean_unmerged_kept() {
@@ -342,6 +357,11 @@ t_clean_nested_unmerged_preserved() {
 t_clean_nested_merged_removed() {
   local r="$1"
   cw_run "$r" add fix/ceoapp -n >/dev/null 2>&1
+  local wp="$r/.claude/worktrees/fix/ceoapp"
+  echo c > "$wp/c.txt"
+  git -C "$wp" add c.txt
+  git -C "$wp" commit -q -m "c"
+  git -C "$r" merge --ff-only "worktrees-fix/ceoapp" -q
   cw_run "$r" clean >/dev/null 2>&1
   assert_dir_missing "$r/.claude/worktrees/fix/ceoapp" "clean — 중첩 머지 워크트리 삭제"
   assert_dir_missing "$r/.claude/worktrees/fix" "clean — 빈 부모 디렉토리 정리"
@@ -373,8 +393,12 @@ t_clean_prunable() {
 
 t_clean_mixed() {
   local r="$1"
-  # 머지된 워크트리
+  # 진짜 머지된 워크트리 (commit + ff merge)
   cw_run "$r" add merged -n >/dev/null 2>&1
+  echo m > "$r/.claude/worktrees/merged/m.txt"
+  git -C "$r/.claude/worktrees/merged" add m.txt
+  git -C "$r/.claude/worktrees/merged" commit -q -m "m"
+  git -C "$r" merge --ff-only worktrees-merged -q
   # 머지 안 된 워크트리
   cw_run "$r" add unmerged -n >/dev/null 2>&1
   echo c > "$r/.claude/worktrees/unmerged/c.txt"
@@ -385,6 +409,8 @@ t_clean_mixed() {
   echo c > "$r/.claude/worktrees/nested/wt/c.txt"
   git -C "$r/.claude/worktrees/nested/wt" add c.txt
   git -C "$r/.claude/worktrees/nested/wt" commit -q -m "c"
+  # 미작업 워크트리 (HEAD == base) — 보존돼야 함
+  cw_run "$r" add untouched -n >/dev/null 2>&1
   # stray 디렉토리
   mkdir -p "$r/.claude/worktrees/stray"
   echo x > "$r/.claude/worktrees/stray/x"
@@ -394,6 +420,7 @@ t_clean_mixed() {
   assert_dir_missing "$r/.claude/worktrees/merged" "mixed — 머지 워크트리 삭제"
   assert_dir_exists "$r/.claude/worktrees/unmerged" "mixed — 머지 안 된 보존"
   assert_dir_exists "$r/.claude/worktrees/nested/wt" "mixed — 중첩 머지 안 된 보존"
+  assert_dir_exists "$r/.claude/worktrees/untouched" "mixed — 미작업 보존"
   assert_dir_missing "$r/.claude/worktrees/stray" "mixed — stray 삭제"
 }
 
@@ -432,6 +459,7 @@ run_test "remove dirty 거부"            t_remove_dirty_refused
 run_test "remove -f dirty"              t_remove_dirty_force
 run_test "remove unmerged 거부"         t_remove_unmerged_refused
 run_test "clean 머지된 워크트리"        t_clean_merged_removed
+run_test "[회귀] clean 미작업 보존"     t_clean_skips_untouched_branch
 run_test "clean 머지 안 된 보존"        t_clean_unmerged_kept
 run_test "[회귀] clean 중첩 보존"       t_clean_nested_unmerged_preserved
 run_test "clean 중첩 머지된 삭제"       t_clean_nested_merged_removed
