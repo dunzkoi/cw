@@ -4,7 +4,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-CW_VERSION="0.1.7"
+CW_VERSION="0.1.8"
 WORKTREE_BASE=".claude/worktrees"
 INIT_HOOK="${HOME}/.claude/worktree-init.sh"
 
@@ -23,6 +23,35 @@ err()  { echo "${C_RED}✗${C_RESET} $*" >&2; }
 info() { echo "${C_CYAN}●${C_RESET} $*"; }
 hint() { echo "${C_BLUE}💡${C_RESET} $*"; }
 skip() { echo "${C_GRAY}·${C_RESET} ${C_DIM}$*${C_RESET}"; }
+
+# 진행 스피너 — TTY일 때 백그라운드에서 회전 프레임 출력
+_SPINNER_PID=""
+_SPINNER_FRAMES=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+spinner_start() {
+  [ -t 1 ] || return 0
+  spinner_stop  # 이전 스피너 잔존 방지
+  local msg="$1"
+  (
+    local i=0 fcount=${#_SPINNER_FRAMES[@]}
+    while :; do
+      printf '\r\033[K%s%s %s%s' "$C_DIM" "${_SPINNER_FRAMES[$((i % fcount))]}" "$msg" "$C_RESET"
+      i=$((i + 1))
+      sleep 0.1
+    done
+  ) &
+  _SPINNER_PID=$!
+}
+
+spinner_stop() {
+  [ -n "${_SPINNER_PID:-}" ] || return 0
+  kill "$_SPINNER_PID" 2>/dev/null || true
+  wait "$_SPINNER_PID" 2>/dev/null || true
+  _SPINNER_PID=""
+  [ -t 1 ] && printf '\r\033[K'
+}
+
+# 인터럽트/종료 시 스피너 정리
+trap 'spinner_stop' EXIT INT TERM
 
 help() {
   cat <<EOF
@@ -503,14 +532,12 @@ cmd_clean() {
   fi
 
   # 머지된 브랜치 목록을 한 번만 조회 (워크트리마다 git 호출 방지 — 큰 레포에서 속도 체감)
-  if [ "$is_tty" -eq 1 ]; then
-    printf '%s머지된 브랜치 조회 중...%s' "$C_DIM" "$C_RESET"
-  fi
-  local merged_list
+  spinner_start "머지된 브랜치 조회 중..."
+  local merged_list base_sha
   merged_list="$(git branch --merged "$default_br" 2>/dev/null | awk '{print $NF}')"
-  if [ "$is_tty" -eq 1 ]; then
-    printf '\r\033[K'
-  fi
+  # 기준 브랜치 HEAD — "작업 시작 안 된" 워크트리(브랜치 HEAD == base HEAD) 보호용
+  base_sha="$(git rev-parse "$default_br" 2>/dev/null || true)"
+  spinner_stop
 
   local cleaned=0 skipped=0
   local -a kept_unmerged=()
@@ -522,11 +549,9 @@ cmd_clean() {
     local name prefix
     name="${wtpath#"$wbase"/}"
     prefix="${C_DIM}[${idx}/${total}]${C_RESET}"
-    if [ "$is_tty" -eq 1 ]; then
-      printf '\r\033[K%s[%d/%d] 정리 중: %s...%s' "$C_DIM" "$idx" "$total" "$name" "$C_RESET"
-    fi
+    spinner_start "[${idx}/${total}] 정리 중: ${name} (stray)"
     rm -rf "$wtpath"
-    [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+    spinner_stop
     ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} ${C_DIM}(stray 디렉토리 — git 등록 없음)${C_RESET}"
     cleaned=$((cleaned + 1))
   done
@@ -550,8 +575,9 @@ cmd_clean() {
     # prunable: git 내부 메타데이터는 살아있지만 워크트리 .git 파일이 사라진 상태
     # → 디렉토리 정리하고 git worktree prune이 메타데이터 정리하게 둠
     if [ "$prunable" = "1" ]; then
-      [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+      spinner_start "[${idx}/${total}] 정리 중: ${name} (prunable)"
       [ -d "$wtpath" ] && rm -rf "$wtpath"
+      spinner_stop
       ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} ${C_DIM}(prunable — git 등록 메타데이터만 잔존)${C_RESET}"
       cleaned=$((cleaned + 1))
       continue
@@ -575,11 +601,16 @@ cmd_clean() {
         continue
       fi
       if git merge-base --is-ancestor "$head_sha" "$default_br" 2>/dev/null; then
-        if git worktree remove "$wtpath" --force 2>/dev/null; then
+        spinner_start "[${idx}/${total}] 정리 중: ${name} (detached, 워크트리 삭제)"
+        local _rc=0
+        git worktree remove "$wtpath" --force 2>/dev/null || _rc=$?
+        if [ "$_rc" -eq 0 ]; then
           [ -d "$wtpath" ] && rm -rf "$wtpath"
+          spinner_stop
           ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} (${C_DIM}detached ${head_sha:0:10}${C_RESET}) — ${default_br}에 포함됨"
           cleaned=$((cleaned + 1))
         else
+          spinner_stop
           err "${prefix} 유지: ${name} (detached) — 제거 실패"
           skipped=$((skipped + 1))
         fi
@@ -592,13 +623,32 @@ cmd_clean() {
 
     # 미리 계산한 merged_list에서 조회 (O(N) → O(1) 스케일의 체감 개선)
     if printf '%s\n' "$merged_list" | grep -qFx "$branch"; then
-      [ "$is_tty" -eq 1 ] && printf '\r\033[K'
-      if git worktree remove "$wtpath" --force 2>/dev/null; then
+      # cw add 후 작업 시작 안 한 워크트리 자동 삭제 방지:
+      # - 브랜치 HEAD == base HEAD (작업 commit이 없거나 ff-merge로 합쳐진 상태)
+      # - 그리고 브랜치 reflog가 생성 1줄뿐 (자체 commit 흔적이 한 번도 없음)
+      # ff-merge 후에는 reflog가 2줄+ 이라 정상 머지 정리가 진행됨.
+      local br_sha refcount
+      br_sha="$(git rev-parse "$branch" 2>/dev/null || true)"
+      if [ -n "$br_sha" ] && [ -n "$base_sha" ] && [ "$br_sha" = "$base_sha" ]; then
+        refcount="$(git reflog show "$branch" 2>/dev/null | wc -l | tr -d ' ')"
+        if [ "${refcount:-0}" -le 1 ]; then
+          [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+          skip "${prefix} 유지: ${name} (${branch}) — ${default_br}와 동일 (작업 시작 안 됨)"
+          skipped=$((skipped + 1))
+          continue
+        fi
+      fi
+      spinner_start "[${idx}/${total}] 정리 중: ${name} (${branch}, 워크트리 삭제)"
+      local _rc=0
+      git worktree remove "$wtpath" --force 2>/dev/null || _rc=$?
+      if [ "$_rc" -eq 0 ]; then
         [ -d "$wtpath" ] && rm -rf "$wtpath"
         git branch -D "$branch" 2>/dev/null || true
+        spinner_stop
         ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} (${C_DIM}${branch}${C_RESET}) — ${default_br}에 머지됨"
         cleaned=$((cleaned + 1))
       else
+        spinner_stop
         err "${prefix} 유지: ${name} (${branch}) — 제거 실패"
         skipped=$((skipped + 1))
       fi
