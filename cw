@@ -4,7 +4,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-CW_VERSION="0.1.8"
+CW_VERSION="0.1.9"
 WORKTREE_BASE=".claude/worktrees"
 INIT_HOOK="${HOME}/.claude/worktree-init.sh"
 
@@ -128,6 +128,14 @@ require_worktree() {
 is_locked() {
   local wpath="$1"
   [ -f "$(git rev-parse --git-common-dir 2>/dev/null)/worktrees/$(basename "$wpath")/locked" ]
+}
+
+# 워크트리의 dirty(uncommitted) 변경 목록 출력. 깨끗하면 빈 문자열.
+# .claude-worktree-keep 화이트리스트 파일은 무시 (cmd_remove와 동일 정책).
+# stdout: dirty 라인들. 호출자는 [ -n "$(...)" ] 로 판단.
+worktree_dirty() {
+  local wpath="$1"
+  git -C "$wpath" status --porcelain 2>/dev/null | grep -v '\.claude-worktree-keep$' || true
 }
 
 # 번들 단일 문자 옵션 확장: -Fn → -F -n
@@ -428,7 +436,7 @@ cmd_remove() {
 
   # 더티 상태 확인
   local dirty
-  dirty="$(git -C "$wpath" status --porcelain 2>/dev/null | grep -v '\.claude-worktree-keep$' || true)"
+  dirty="$(worktree_dirty "$wpath")"
   if [ -n "$dirty" ] && [ "$opt_force" -eq 0 ]; then
     warn "변경사항 있음:"
     echo "$dirty" | head -10 | sed "s/^/  ${C_GRAY}·${C_RESET} /"
@@ -533,10 +541,8 @@ cmd_clean() {
 
   # 머지된 브랜치 목록을 한 번만 조회 (워크트리마다 git 호출 방지 — 큰 레포에서 속도 체감)
   spinner_start "머지된 브랜치 조회 중..."
-  local merged_list base_sha
+  local merged_list
   merged_list="$(git branch --merged "$default_br" 2>/dev/null | awk '{print $NF}')"
-  # 기준 브랜치 HEAD — "작업 시작 안 된" 워크트리(브랜치 HEAD == base HEAD) 보호용
-  base_sha="$(git rev-parse "$default_br" 2>/dev/null || true)"
   spinner_stop
 
   local cleaned=0 skipped=0
@@ -601,6 +607,16 @@ cmd_clean() {
         continue
       fi
       if git merge-base --is-ancestor "$head_sha" "$default_br" 2>/dev/null; then
+        # 보호: dirty(uncommitted) 변경 있으면 자동 삭제 금지
+        local dirty
+        dirty="$(worktree_dirty "$wtpath")"
+        if [ -n "$dirty" ]; then
+          [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+          skip "${prefix} 유지: ${name} (detached) — 변경사항 있음 (cw remove ${name} -f 로 강제)"
+          kept_unmerged+=("${name}|detached")
+          skipped=$((skipped + 1))
+          continue
+        fi
         spinner_start "[${idx}/${total}] 정리 중: ${name} (detached, 워크트리 삭제)"
         local _rc=0
         git worktree remove "$wtpath" --force 2>/dev/null || _rc=$?
@@ -622,21 +638,32 @@ cmd_clean() {
     fi
 
     # 미리 계산한 merged_list에서 조회 (O(N) → O(1) 스케일의 체감 개선)
+    # 주의: `git branch --merged X` 는 reachability 기반 — 브랜치 tip이 X의 ancestor면
+    # 실제 PR 머지 여부와 무관하게 포함됨. 옛 main commit에 머문 브랜치도 false-positive.
+    # 따라서 삭제 전 두 가드를 통과해야 함:
+    #   (1) 워크트리에 uncommitted 변경 없음 (dirty 검사)
+    #   (2) 브랜치 reflog에 자체 commit 흔적이 있음 (refcount > 1)
     if printf '%s\n' "$merged_list" | grep -qFx "$branch"; then
-      # cw add 후 작업 시작 안 한 워크트리 자동 삭제 방지:
-      # - 브랜치 HEAD == base HEAD (작업 commit이 없거나 ff-merge로 합쳐진 상태)
-      # - 그리고 브랜치 reflog가 생성 1줄뿐 (자체 commit 흔적이 한 번도 없음)
-      # ff-merge 후에는 reflog가 2줄+ 이라 정상 머지 정리가 진행됨.
-      local br_sha refcount
-      br_sha="$(git rev-parse "$branch" 2>/dev/null || true)"
-      if [ -n "$br_sha" ] && [ -n "$base_sha" ] && [ "$br_sha" = "$base_sha" ]; then
-        refcount="$(git reflog show "$branch" 2>/dev/null | wc -l | tr -d ' ')"
-        if [ "${refcount:-0}" -le 1 ]; then
-          [ "$is_tty" -eq 1 ] && printf '\r\033[K'
-          skip "${prefix} 유지: ${name} (${branch}) — ${default_br}와 동일 (작업 시작 안 됨)"
-          skipped=$((skipped + 1))
-          continue
-        fi
+      # 보호 1: dirty 워크트리 (작업 중)는 절대 자동 삭제 금지
+      local dirty
+      dirty="$(worktree_dirty "$wtpath")"
+      if [ -n "$dirty" ]; then
+        [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+        skip "${prefix} 유지: ${name} (${branch}) — 변경사항 있음 (cw remove ${name} -f 로 강제)"
+        kept_unmerged+=("${name}|${branch}")
+        skipped=$((skipped + 1))
+        continue
+      fi
+      # 보호 2: 브랜치 reflog가 생성 1줄뿐이면 자체 commit 흔적 없음 → 보존
+      # (cw add 직후, 또는 옛 base에서 만들어진 후 작업 안 한 케이스 모두 커버.
+      # ff-merge 후에는 reflog 2+ 라 정상 정리가 진행됨.)
+      local refcount
+      refcount="$(git reflog show "$branch" 2>/dev/null | wc -l | tr -d ' ')"
+      if [ "${refcount:-0}" -le 1 ]; then
+        [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+        skip "${prefix} 유지: ${name} (${branch}) — 자체 commit 흔적 없음"
+        skipped=$((skipped + 1))
+        continue
       fi
       spinner_start "[${idx}/${total}] 정리 중: ${name} (${branch}, 워크트리 삭제)"
       local _rc=0
