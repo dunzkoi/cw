@@ -4,7 +4,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-CW_VERSION="0.1.9"
+CW_VERSION="0.1.10"
 WORKTREE_BASE=".claude/worktrees"
 INIT_HOOK="${HOME}/.claude/worktree-init.sh"
 
@@ -136,6 +136,17 @@ is_locked() {
 worktree_dirty() {
   local wpath="$1"
   git -C "$wpath" status --porcelain 2>/dev/null | grep -v '\.claude-worktree-keep$' || true
+}
+
+# branch의 모든 commit이 base에 patch-equivalent로 존재하면 0(effectively merged) 반환.
+# git cherry 출력: '+ <sha>' = base에 없는 commit, '- <sha>' = patch-id 매치 commit.
+# ancestor 케이스(branch가 base의 조상)도 빈 출력으로 동일 판정.
+# 한계: squash merge로 다수 commit이 1개로 합쳐지면 patch-id가 달라져 못 잡음.
+is_effectively_merged() {
+  local branch="$1" base="$2"
+  local unmerged
+  unmerged="$(git cherry "$base" "$branch" 2>/dev/null | awk '/^\+/ {c++} END {print c+0}')"
+  [ "${unmerged:-99}" -eq 0 ]
 }
 
 # 번들 단일 문자 옵션 확장: -Fn → -F -n
@@ -539,11 +550,10 @@ cmd_clean() {
     exit 0
   fi
 
-  # 머지된 브랜치 목록을 한 번만 조회 (워크트리마다 git 호출 방지 — 큰 레포에서 속도 체감)
-  spinner_start "머지된 브랜치 조회 중..."
-  local merged_list
-  merged_list="$(git branch --merged "$default_br" 2>/dev/null | awk '{print $NF}')"
-  spinner_stop
+  # NOTE: merged_list 사전 조회는 v0.1.10에서 제거.
+  # `git branch --merged`는 reachability(SHA 기반)만 봐서 rebase 후 patch-equivalent
+  # 케이스를 false-negative 처리함. 대신 워크트리별로 `git cherry`(patch-id 기반)를
+  # is_effectively_merged()로 호출해 ancestor + rebase 둘 다 잡는다.
 
   local cleaned=0 skipped=0
   local -a kept_unmerged=()
@@ -637,13 +647,12 @@ cmd_clean() {
       continue
     fi
 
-    # 미리 계산한 merged_list에서 조회 (O(N) → O(1) 스케일의 체감 개선)
-    # 주의: `git branch --merged X` 는 reachability 기반 — 브랜치 tip이 X의 ancestor면
-    # 실제 PR 머지 여부와 무관하게 포함됨. 옛 main commit에 머문 브랜치도 false-positive.
-    # 따라서 삭제 전 두 가드를 통과해야 함:
+    # patch-id 기반 머지 판정 (ancestor + rebase 모두 커버, squash는 한계).
+    # 주의: false-positive 위험 — 옛 main commit에 머문 브랜치도 cherry가 빈 출력 →
+    # "merged"로 판정될 수 있음. 따라서 삭제 전 두 가드 통과 필수:
     #   (1) 워크트리에 uncommitted 변경 없음 (dirty 검사)
     #   (2) 브랜치 reflog에 자체 commit 흔적이 있음 (refcount > 1)
-    if printf '%s\n' "$merged_list" | grep -qFx "$branch"; then
+    if is_effectively_merged "$branch" "$default_br"; then
       # 보호 1: dirty 워크트리 (작업 중)는 절대 자동 삭제 금지
       local dirty
       dirty="$(worktree_dirty "$wtpath")"
