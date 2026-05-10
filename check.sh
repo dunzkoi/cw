@@ -376,6 +376,40 @@ t_clean_old_base_no_work_kept() {
   assert_branch_exists "$r" "feature/stale2" "[회귀] clean — 옛 base 브랜치 보존"
 }
 
+# 회귀 테스트 (v0.1.10 — 사용자 LMS 케이스):
+# 브랜치가 rebase되어 main과 SHA가 다르지만 patch-id는 동일.
+# `git branch --merged`는 reachability 기반이라 false-negative.
+# is_effectively_merged()는 git cherry(patch-id) 기반이라 잡음.
+t_clean_rebase_merged_removed() {
+  local r="$1"
+  cw_run "$r" add rb1 -n >/dev/null 2>&1
+  local wp="$r/.claude/worktrees/rb1"
+  # 워크트리에서 commit Y
+  echo y > "$wp/y.txt"
+  git -C "$wp" add y.txt
+  git -C "$wp" commit -q -m "feature y"
+  # main을 다른 방향으로 advance시킴 — cherry-pick 시 parent가 달라져 SHA 분기
+  echo m > "$r/m.txt"
+  git -C "$r" add m.txt
+  git -C "$r" commit -q -m "main side commit"
+  # main에 같은 patch를 cherry-pick (rebase 후 머지된 효과 — SHA만 다름, patch-id 동일)
+  git -C "$r" cherry-pick --quiet worktrees-rb1 >/dev/null 2>&1
+  # 셋업 sanity: SHA 분기됐는지 확인
+  local main_sha rb_sha
+  main_sha="$(git -C "$r" rev-parse main)"
+  rb_sha="$(git -C "$r" rev-parse worktrees-rb1)"
+  if [ "$main_sha" = "$rb_sha" ]; then
+    fail "[회귀] 셋업 — rebase 시뮬레이션 SHA 동일"
+    return
+  fi
+  # 워크트리는 깨끗 (uncommitted 변경 없음 — dirty 가드 통과)
+  cw_run "$r" clean >/dev/null 2>&1
+  assert_dir_missing "$wp" \
+    "[회귀] clean — rebase 후 patch-equivalent 머지 삭제 (SHA 달라도 patch-id 일치)"
+  assert_branch_missing "$r" "worktrees-rb1" \
+    "[회귀] clean — rebase 후 머지 브랜치 삭제"
+}
+
 # 회귀 테스트: detached HEAD에서도 dirty 보호
 t_clean_detached_dirty_kept() {
   local r="$1"
@@ -523,6 +557,7 @@ run_test "clean 머지된 워크트리"        t_clean_merged_removed
 run_test "[회귀] clean 미작업 보존"     t_clean_skips_untouched_branch
 run_test "[회귀] clean dirty+옛base"    t_clean_dirty_old_base_kept
 run_test "[회귀] clean 옛base 작업없음" t_clean_old_base_no_work_kept
+run_test "[회귀] clean rebase 머지"     t_clean_rebase_merged_removed
 run_test "[회귀] clean detached dirty"  t_clean_detached_dirty_kept
 run_test "clean 머지 안 된 보존"        t_clean_unmerged_kept
 run_test "[회귀] clean 중첩 보존"       t_clean_nested_unmerged_preserved
