@@ -325,6 +325,67 @@ t_clean_skips_untouched_branch() {
   assert_branch_exists "$r" "worktrees-untouched" "[회귀] clean — 미작업 브랜치 보존"
 }
 
+# 회귀 테스트 (v0.1.9 — 사용자 실제 케이스):
+# 옛 main commit에 머문 브랜치 + 워크트리에 uncommitted work 있음.
+# git branch --merged main에는 포함되지만 (tip이 main ancestor) 실제 작업은 미커밋.
+# 이전 버전은 br_sha != base_sha 라서 보호 우회 → dirty 검사 없이 삭제 → 데이터 손실.
+t_clean_dirty_old_base_kept() {
+  local r="$1"
+  # 1. main에 후속 commit 추가 (브랜치 생성 시점을 옛 base로 만들기 위해)
+  cw_run "$r" add stale feature/stale -n >/dev/null 2>&1
+  # main을 advance — 다른 워크트리 만들고 머지
+  cw_run "$r" add advancer -n >/dev/null 2>&1
+  echo a > "$r/.claude/worktrees/advancer/a.txt"
+  git -C "$r/.claude/worktrees/advancer" add a.txt
+  git -C "$r/.claude/worktrees/advancer" commit -q -m "advance"
+  git -C "$r" merge --ff-only worktrees-advancer -q
+  # 이제 feature/stale은 옛 main에 머물러 있고 main은 앞으로 이동했음
+  # feature/stale이 --merged main 에 포함되는지 확인 (sanity)
+  if ! git -C "$r" branch --merged main | grep -q "feature/stale"; then
+    fail "[회귀] 셋업 실패 — feature/stale이 --merged 에 포함 안 됨"
+    return
+  fi
+  # 사용자가 워크트리에서 작업 중 (uncommitted)
+  echo "WIP" > "$r/.claude/worktrees/stale/wip.txt"
+  echo "MORE" >> "$r/README"
+  # cw clean 실행 — 삭제되면 데이터 손실
+  cw_run "$r" clean >/dev/null 2>&1
+  assert_dir_exists "$r/.claude/worktrees/stale" \
+    "[회귀] clean — 옛 base + dirty 워크트리 보존 (사용자 케이스)"
+  if [ -f "$r/.claude/worktrees/stale/wip.txt" ]; then
+    pass "[회귀] clean — uncommitted 파일 보존"
+  else
+    fail "[회귀] clean — uncommitted 파일 사라짐 (데이터 손실)"
+  fi
+  assert_branch_exists "$r" "feature/stale" "[회귀] clean — 옛 base 브랜치 보존"
+}
+
+# 회귀 테스트: 옛 main commit에 머문 브랜치 + dirty 없음 + reflog 1줄 → 보존
+# (작업 시작 안 한 stale 워크트리)
+t_clean_old_base_no_work_kept() {
+  local r="$1"
+  cw_run "$r" add stale2 feature/stale2 -n >/dev/null 2>&1
+  cw_run "$r" add advancer2 -n >/dev/null 2>&1
+  echo a > "$r/.claude/worktrees/advancer2/a.txt"
+  git -C "$r/.claude/worktrees/advancer2" add a.txt
+  git -C "$r/.claude/worktrees/advancer2" commit -q -m "advance"
+  git -C "$r" merge --ff-only worktrees-advancer2 -q
+  cw_run "$r" clean >/dev/null 2>&1
+  assert_dir_exists "$r/.claude/worktrees/stale2" \
+    "[회귀] clean — 옛 base 위치 + 작업 없음 보존 (refcount<=1)"
+  assert_branch_exists "$r" "feature/stale2" "[회귀] clean — 옛 base 브랜치 보존"
+}
+
+# 회귀 테스트: detached HEAD에서도 dirty 보호
+t_clean_detached_dirty_kept() {
+  local r="$1"
+  cw_run "$r" add det1 -d -n >/dev/null 2>&1
+  echo dirty > "$r/.claude/worktrees/det1/wip.txt"
+  cw_run "$r" clean >/dev/null 2>&1
+  assert_dir_exists "$r/.claude/worktrees/det1" \
+    "[회귀] clean — detached + dirty 보존"
+}
+
 t_clean_unmerged_kept() {
   local r="$1"
   cw_run "$r" add cm2 -n >/dev/null 2>&1
@@ -460,6 +521,9 @@ run_test "remove -f dirty"              t_remove_dirty_force
 run_test "remove unmerged 거부"         t_remove_unmerged_refused
 run_test "clean 머지된 워크트리"        t_clean_merged_removed
 run_test "[회귀] clean 미작업 보존"     t_clean_skips_untouched_branch
+run_test "[회귀] clean dirty+옛base"    t_clean_dirty_old_base_kept
+run_test "[회귀] clean 옛base 작업없음" t_clean_old_base_no_work_kept
+run_test "[회귀] clean detached dirty"  t_clean_detached_dirty_kept
 run_test "clean 머지 안 된 보존"        t_clean_unmerged_kept
 run_test "[회귀] clean 중첩 보존"       t_clean_nested_unmerged_preserved
 run_test "clean 중첩 머지된 삭제"       t_clean_nested_merged_removed
