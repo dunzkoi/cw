@@ -4,7 +4,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-CW_VERSION="0.1.13"
+CW_VERSION="0.1.14"
 DEFAULT_WORKTREE_BASE=".claude/worktrees"
 # resolve/clean 대상 — 앞쪽이 우선 (.claude/worktrees → .worktrees)
 WORKTREE_BASES=(".claude/worktrees" ".worktrees")
@@ -65,7 +65,7 @@ ${C_BOLD}Commands:${C_RESET}
   ${C_CYAN}open${C_RESET} <name>                    기존 워크트리에서 claude 실행
   ${C_CYAN}path${C_RESET} <name>                    워크트리 경로 출력 (claude 실행 X)
   ${C_CYAN}list${C_RESET} [옵션]                  워크트리 목록 (TTY: 대화형 선택)
-  ${C_CYAN}cd${C_RESET} <name>                      cd 명령 출력 (eval "$(cw cd <name>)")
+  ${C_CYAN}cd${C_RESET} <name>                      cd 명령 출력 (eval "\$(cw cd <name>)")
   ${C_CYAN}cursor${C_RESET} <name>                  Cursor에서 워크트리 열기
   ${C_CYAN}name${C_RESET} <name>                    워크트리 이름 출력 + 클립보드 복사
   ${C_CYAN}remove${C_RESET} <name> [-f|--force]     특정 워크트리 삭제 (브랜치 포함)
@@ -96,7 +96,7 @@ ${C_BOLD}Examples:${C_RESET}
   cw path BMSQUARE-16512
   cw cursor BMSQUARE-16512
   cw name BMSQUARE-16512
-  eval "$(cw cd BMSQUARE-16512)"
+  eval "\$(cw cd BMSQUARE-16512)"
   cw list --plain                  # 파이프/스크립트용 텍스트 목록
   cw list                          # TTY: ↑↓ 선택 + 액션 메뉴
   cw BMSQUARE-16512              # 이름만 입력 → 액션 메뉴
@@ -361,22 +361,49 @@ _tty_saved=""
 tty_raw_on() {
   [ -t 0 ] || return 1
   _tty_saved="$(stty -g 2>/dev/null || true)"
+  # min 1 time 0: 1바이트 올 때까지 블록 (bash 3.2 호환)
   stty -echo -icanon min 1 time 0 2>/dev/null || return 1
 }
 
 tty_raw_off() {
-  [ -n "$_tty_saved" ] && stty "$_tty_saved" 2>/dev/null || true
+  [ -n "${_tty_saved:-}" ] && stty "$_tty_saved" 2>/dev/null || true
   _tty_saved=""
 }
 
+# 키 1회 읽기 → REPLY_KEY.
+# - 방향키: ESC [ A / ESC O A (즉시 도착)
+# - Enter: raw 모드 CR(\r) → \n 정규화
+# - 단독 ESC: bash 3.2는 read -t 소수초 미지원 → 최대 1초 대기 후 확정
+# macOS에서 stty min0+bash read 조합은 hang 나므로 쓰지 않음
 read_key() {
-  local k seq=""
-  IFS= read -rsn1 k || return 1
-  if [[ $k == $'\x1b' ]]; then
-    IFS= read -rsn2 -t 0.05 seq || true
-    k+="$seq"
+  REPLY_KEY=""
+  local k="" e1="" e2=""
+  IFS= read -r -n1 k || return 1
+
+  if [[ -z "$k" || "$k" == $'\n' || "$k" == $'\r' ]]; then
+    REPLY_KEY=$'\n'
+    return 0
   fi
-  printf '%s' "$k"
+
+  if [[ "$k" != $'\x1b' ]]; then
+    REPLY_KEY="$k"
+    return 0
+  fi
+
+  if IFS= read -r -n1 -t 1 e1; then
+    if [[ "$e1" == '[' || "$e1" == 'O' ]]; then
+      IFS= read -r -n1 -t 1 e2 || e2=""
+      REPLY_KEY=$'\x1b'"${e1}${e2}"
+      return 0
+    fi
+    # ESC+다른 키 (Alt 조합 등)
+    REPLY_KEY=$'\x1b'"${e1}"
+    return 0
+  fi
+
+  # 후속 바이트 없음 → 단독 ESC
+  REPLY_KEY=$'\x1b'
+  return 0
 }
 
 _tilde_path() {
@@ -511,11 +538,11 @@ menu_pick() {
     done
     echo ""
     printf "${C_DIM}↑↓ 이동 · Enter 선택 · q 취소${C_RESET}\n"
-    key="$(read_key)" || { tty_raw_off; return 1; }
-    case "$key" in
-      $'\x1b[A'|$'\x1bOA'|'A'|'k') idx=$(( (idx + n - 1) % n )) ;;
-      $'\x1b[B'|$'\x1bOB'|'B'|'j') idx=$(( (idx + 1) % n )) ;;
-      ''|$'\n') tty_raw_off; echo "$idx"; return 0 ;;
+    read_key || { tty_raw_off; return 1; }
+    case "$REPLY_KEY" in
+      $'\x1b[A'|$'\x1bOA'|k) idx=$(( (idx + n - 1) % n )) ;;
+      $'\x1b[B'|$'\x1bOB'|j) idx=$(( (idx + 1) % n )) ;;
+      $'\n') tty_raw_off; echo "$idx"; return 0 ;;
       q|Q|$'\x1b') tty_raw_off; return 1 ;;
     esac
   done
@@ -581,11 +608,11 @@ cmd_list_interactive() {
     done
     echo ""
     printf "${C_DIM}Enter: 액션 메뉴 · q: 종료${C_RESET}\n"
-    key="$(read_key)" || break
-    case "$key" in
-      $'\x1b[A'|$'\x1bOA'|'A'|'k') idx=$(( (idx + n - 1) % n )) ;;
-      $'\x1b[B'|$'\x1bOB'|'B'|'j') idx=$(( (idx + 1) % n )) ;;
-      ''|$'\n')
+    read_key || break
+    case "$REPLY_KEY" in
+      $'\x1b[A'|$'\x1bOA'|k) idx=$(( (idx + n - 1) % n )) ;;
+      $'\x1b[B'|$'\x1bOB'|j) idx=$(( (idx + 1) % n )) ;;
+      $'\n')
         sel_path="${_WT_PATHS[$idx]}"
         tty_raw_off
         echo ""
