@@ -4,8 +4,10 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-CW_VERSION="0.1.10"
-WORKTREE_BASE=".claude/worktrees"
+CW_VERSION="0.1.13"
+DEFAULT_WORKTREE_BASE=".claude/worktrees"
+# resolve/clean 대상 — 앞쪽이 우선 (.claude/worktrees → .worktrees)
+WORKTREE_BASES=(".claude/worktrees" ".worktrees")
 INIT_HOOK="${HOME}/.claude/worktree-init.sh"
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -62,7 +64,10 @@ ${C_BOLD}Commands:${C_RESET}
                                   워크트리 생성 후 claude 실행
   ${C_CYAN}open${C_RESET} <name>                    기존 워크트리에서 claude 실행
   ${C_CYAN}path${C_RESET} <name>                    워크트리 경로 출력 (claude 실행 X)
-  ${C_CYAN}list${C_RESET}                            워크트리 목록
+  ${C_CYAN}list${C_RESET} [옵션]                  워크트리 목록 (TTY: 대화형 선택)
+  ${C_CYAN}cd${C_RESET} <name>                      cd 명령 출력 (eval "$(cw cd <name>)")
+  ${C_CYAN}cursor${C_RESET} <name>                  Cursor에서 워크트리 열기
+  ${C_CYAN}name${C_RESET} <name>                    워크트리 이름 출력 + 클립보드 복사
   ${C_CYAN}remove${C_RESET} <name> [-f|--force]     특정 워크트리 삭제 (브랜치 포함)
   ${C_CYAN}clean${C_RESET} [base]                    머지된 워크트리 일괄 정리 (기본: 메인 워크트리의 현재 브랜치)
   ${C_CYAN}lock${C_RESET} <name> [reason]           워크트리 잠금 (삭제 방지)
@@ -74,7 +79,7 @@ ${C_BOLD}Commands:${C_RESET}
   ${C_CYAN}-v, --version${C_RESET}                   버전 출력
 
 ${C_BOLD}Arguments (add):${C_RESET}
-  ${C_DIM}folder${C_RESET}        워크트리 폴더명 (.claude/worktrees/<folder>)
+  ${C_DIM}folder${C_RESET}        워크트리 폴더명 (조회/삭제/정리: .claude/worktrees + .worktrees)
   ${C_DIM}branch${C_RESET}        생성할 git 브랜치명 (생략 시 worktrees-<folder>)
   ${C_DIM}base${C_RESET}          베이스 브랜치 (생략 시 기본 브랜치 감지)
   ${C_DIM}-l, --lock${C_RESET}        생성 즉시 잠금
@@ -89,9 +94,12 @@ ${C_BOLD}Examples:${C_RESET}
   cw add feature -Fn
   cw open BMSQUARE-16512
   cw path BMSQUARE-16512
-  cw remove BMSQUARE-16512 -f
-  cw repair
-  cw list | cw clean | cw prune
+  cw cursor BMSQUARE-16512
+  cw name BMSQUARE-16512
+  eval "$(cw cd BMSQUARE-16512)"
+  cw list --plain                  # 파이프/스크립트용 텍스트 목록
+  cw list                          # TTY: ↑↓ 선택 + 액션 메뉴
+  cw BMSQUARE-16512              # 이름만 입력 → 액션 메뉴
 
 ${C_BOLD}Env:${C_RESET}
   ${C_DIM}NO_COLOR=1${C_RESET}   색상 비활성화
@@ -111,18 +119,72 @@ require_repo() {
   fi
 }
 
+# path가 cw 관리 베이스 하위인지 (.claude/worktrees, .worktrees)
+is_managed_worktree_path() {
+  local path="$1" base
+  for base in "${WORKTREE_BASES[@]}"; do
+    case "$path" in
+      "${REPO_ROOT}/${base}"/*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# 관리 베이스 기준 상대 이름 (예: BMSQUARE-15764, fix/ceoapp)
+worktree_relative_name() {
+  local path="$1" base fullbase
+  for base in "${WORKTREE_BASES[@]}"; do
+    fullbase="${REPO_ROOT}/${base}"
+    case "$path" in
+      "$fullbase"/*)
+        printf '%s' "${path#"$fullbase"/}"
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+# RESOLVED_PATH / RESOLVED_BASE / RESOLVED_NAME 설정. 없으면 1.
+resolve_worktree_by_name() {
+  local name="$1" base wpath
+  RESOLVED_PATH=""
+  RESOLVED_BASE=""
+  RESOLVED_NAME=""
+  for base in "${WORKTREE_BASES[@]}"; do
+    wpath="${REPO_ROOT}/${base}/${name}"
+    if [ -d "$wpath" ]; then
+      RESOLVED_PATH="$wpath"
+      RESOLVED_BASE="$base"
+      RESOLVED_NAME="$name"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# git worktree list에서 관리 대상 워크트리 상대 이름 나열
+list_managed_worktree_names() {
+  local wtpath rel
+  while IFS= read -r wtpath; do
+    [ -n "$wtpath" ] || continue
+    rel="$(worktree_relative_name "$wtpath" 2>/dev/null || true)"
+    [ -n "$rel" ] && printf '%s\n' "$rel"
+  done < <(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print $2}')
+}
+
 require_claude() {
   command -v claude >/dev/null 2>&1 || { err "claude CLI 미설치"; exit 1; }
 }
 
 require_worktree() {
   local name="$1"
-  local wpath="${REPO_ROOT}/${WORKTREE_BASE}/${name}"
-  if [ ! -d "$wpath" ]; then
-    err "워크트리 없음: ${wpath}"
-    return 1
+  if resolve_worktree_by_name "$name"; then
+    WPATH="$RESOLVED_PATH"
+    return 0
   fi
-  WPATH="$wpath"
+  err "워크트리 없음: ${name} ${C_DIM}(검색: ${WORKTREE_BASES[*]})${C_RESET}"
+  return 1
 }
 
 is_locked() {
@@ -228,7 +290,7 @@ cmd_add() {
   branch="${branch_arg:-worktrees-${name}}"
   base="${base_arg:-$default_br}"
 
-  local wpath="${REPO_ROOT}/${WORKTREE_BASE}/${name}"
+  local wpath="${REPO_ROOT}/${DEFAULT_WORKTREE_BASE}/${name}"
 
   if [ -d "$wpath" ]; then
     info "이미 존재: ${C_DIM}${wpath}${C_RESET}"
@@ -249,7 +311,7 @@ cmd_add() {
     git fetch origin 2>/dev/null || warn "fetch 실패 (네트워크/원격 확인)"
   fi
 
-  mkdir -p "${REPO_ROOT}/${WORKTREE_BASE}"
+  mkdir -p "${REPO_ROOT}/${DEFAULT_WORKTREE_BASE}"
 
   info "워크트리 생성: ${C_BOLD}${wpath}${C_RESET}"
 
@@ -294,7 +356,249 @@ cmd_add() {
   exec claude --dangerously-skip-permissions
 }
 
-cmd_list() {
+_tty_saved=""
+
+tty_raw_on() {
+  [ -t 0 ] || return 1
+  _tty_saved="$(stty -g 2>/dev/null || true)"
+  stty -echo -icanon min 1 time 0 2>/dev/null || return 1
+}
+
+tty_raw_off() {
+  [ -n "$_tty_saved" ] && stty "$_tty_saved" 2>/dev/null || true
+  _tty_saved=""
+}
+
+read_key() {
+  local k seq=""
+  IFS= read -rsn1 k || return 1
+  if [[ $k == $'\x1b' ]]; then
+    IFS= read -rsn2 -t 0.05 seq || true
+    k+="$seq"
+  fi
+  printf '%s' "$k"
+}
+
+_tilde_path() {
+  local p="$1" hl="${#HOME}"
+  if [ "$hl" -gt 0 ] && [[ "$p" == "$HOME"* ]]; then
+    printf '~%s' "${p:$hl}"
+  else
+    printf '%s' "$p"
+  fi
+}
+
+copy_to_clipboard() {
+  local text="$1"
+  [ -z "${NO_CLIPBOARD:-}" ] || return 1
+  local copier=""
+  if command -v pbcopy >/dev/null 2>&1; then copier="pbcopy"
+  elif command -v wl-copy >/dev/null 2>&1; then copier="wl-copy"
+  elif command -v xclip >/dev/null 2>&1; then copier="xclip -selection clipboard"
+  fi
+  [ -n "$copier" ] || return 1
+  printf '%s' "$text" | eval "$copier" 2>/dev/null
+}
+
+copy_path_clipboard() {
+  copy_to_clipboard "$1"
+}
+
+# 관리 베이스 상대 이름 > 현재 브랜치 > basename
+worktree_display_name() {
+  local wpath="$1" name
+  name="$(worktree_relative_name "$wpath" 2>/dev/null || true)"
+  if [ -z "$name" ]; then
+    name="$(git -C "$wpath" branch --show-current 2>/dev/null || true)"
+  fi
+  if [ -z "$name" ]; then
+    name="$(basename "$wpath")"
+  fi
+  printf '%s' "$name"
+}
+
+open_in_cursor() {
+  local path="$1"
+  if command -v cursor >/dev/null 2>&1; then
+    cursor "$path" >/dev/null 2>&1 &
+    ok "Cursor 열림: ${C_DIM}$(_tilde_path "$path")${C_RESET}"
+    return 0
+  fi
+  if command -v open >/dev/null 2>&1 && [ -d "/Applications/Cursor.app" ]; then
+    open -a Cursor "$path"
+    ok "Cursor 열림: ${C_DIM}$(_tilde_path "$path")${C_RESET}"
+    return 0
+  fi
+  err "Cursor CLI/app 없음"
+  return 1
+}
+
+collect_worktree_rows() {
+  _WT_PATHS=()
+  _WT_BRANCHES=()
+  _WT_SHAS=()
+  _WT_LOCKED=()
+  _WT_PRUNABLE=()
+  _WT_BARE=()
+  local path="" sha="" branch="" locked=0 prunable=0 bare=0
+  _wt_flush() {
+    [ -n "$path" ] || return 0
+    _WT_PATHS+=("$path")
+    _WT_BRANCHES+=("$branch")
+    _WT_SHAS+=("$sha")
+    _WT_LOCKED+=("$locked")
+    _WT_PRUNABLE+=("$prunable")
+    _WT_BARE+=("$bare")
+    path=""; sha=""; branch=""; locked=0; prunable=0; bare=0
+  }
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) _wt_flush; path="${line#worktree }" ;;
+      "HEAD "*)     sha="${line#HEAD }"; sha="${sha:0:10}" ;;
+      "branch refs/heads/"*) branch="${line#branch refs/heads/}" ;;
+      "detached"*)  branch="" ;;
+      "bare"*)      bare=1 ;;
+      "locked"*)    locked=1 ;;
+      "prunable"*)  prunable=1 ;;
+    esac
+  done < <(git worktree list --porcelain 2>/dev/null)
+  _wt_flush
+  unset -f _wt_flush
+}
+
+_print_worktree_row() {
+  local idx="$1" selected="$2" main_path="$3"
+  local path="${_WT_PATHS[$idx]}"
+  local branch="${_WT_BRANCHES[$idx]:-}"
+  local sha="${_WT_SHAS[$idx]:-}"
+  local disp prefix branch_out status=""
+  disp="$(_tilde_path "$path")"
+
+  if [ "$selected" -eq 1 ]; then printf "  ${C_BOLD}${C_CYAN}> "
+  else printf "    "; fi
+
+  if [ "$path" = "$main_path" ]; then
+    printf '%s%s%s' "$C_GREEN" "$disp" "$C_RESET"
+  else
+    printf '%s%s%s' "$C_DIM" "$disp" "$C_RESET"
+  fi
+  printf '  %s%s%s  ' "$C_DIM" "$sha" "$C_RESET"
+  if [ -n "$branch" ]; then branch_out="${C_CYAN}[${branch}]${C_RESET}"
+  else branch_out="${C_YELLOW}[detached]${C_RESET}"; fi
+  [ "${_WT_LOCKED[$idx]:-0}" = "1" ] && status="${status} ${C_YELLOW}🔒 locked${C_RESET}"
+  [ "${_WT_PRUNABLE[$idx]:-0}" = "1" ] && status="${status} ${C_RED}⚠ prunable${C_RESET}"
+  [ "${_WT_BARE[$idx]:-0}" = "1" ] && status="${status} ${C_GRAY}(bare)${C_RESET}"
+  printf '%s%s\n' "$branch_out" "$status"
+}
+
+menu_pick() {
+  local title="$1"
+  shift
+  local -a items=("$@")
+  local n=${#items[@]} idx=0 key i pick
+  [ "$n" -gt 0 ] || return 1
+  tty_raw_on || return 1
+  while true; do
+    clear 2>/dev/null || printf '\033[2J\033[H'
+    echo "${C_BOLD}${title}${C_RESET}"
+    echo ""
+    for i in $(seq 0 $((n - 1))); do
+      if [ "$i" -eq "$idx" ]; then
+        printf "  ${C_BOLD}${C_CYAN}> %s${C_RESET}\n" "${items[$i]}"
+      else
+        printf "    %s\n" "${items[$i]}"
+      fi
+    done
+    echo ""
+    printf "${C_DIM}↑↓ 이동 · Enter 선택 · q 취소${C_RESET}\n"
+    key="$(read_key)" || { tty_raw_off; return 1; }
+    case "$key" in
+      $'\x1b[A'|$'\x1bOA'|'A'|'k') idx=$(( (idx + n - 1) % n )) ;;
+      $'\x1b[B'|$'\x1bOB'|'B'|'j') idx=$(( (idx + 1) % n )) ;;
+      ''|$'\n') tty_raw_off; echo "$idx"; return 0 ;;
+      q|Q|$'\x1b') tty_raw_off; return 1 ;;
+    esac
+  done
+}
+
+worktree_action_menu() {
+  local wpath="$1"
+  local rel_name="${2:-}"
+  if [ -z "$rel_name" ] && is_managed_worktree_path "$wpath"; then
+    rel_name="$(worktree_relative_name "$wpath" 2>/dev/null || true)"
+  fi
+  local -a actions=(
+    "Cursor에서 열기"
+    "Claude 실행"
+    "경로 복사"
+    "이름 복사"
+    "cd 명령 출력"
+    "취소"
+  )
+  local pick disp_name
+  disp_name="$(worktree_display_name "$wpath")"
+  pick="$(menu_pick "무엇을 할까요? $(_tilde_path "$wpath")" "${actions[@]}")" || return 0
+  case "$pick" in
+    0) open_in_cursor "$wpath" ;;
+    1)
+      require_claude
+      cd "$wpath"
+      exec claude --dangerously-skip-permissions
+      ;;
+    2)
+      if copy_to_clipboard "$wpath"; then ok "클립보드(경로): $(_tilde_path "$wpath")"
+      else echo "$wpath"; fi
+      ;;
+    3)
+      if copy_to_clipboard "$disp_name"; then ok "클립보드(이름): ${disp_name}"
+      else echo "$disp_name"; fi
+      ;;
+    4)
+      printf 'cd %q\n' "$wpath"
+      if [ -n "$rel_name" ]; then
+        hint "현재 쉘: eval \"\$(cw cd '${rel_name}')\""
+      fi
+      ;;
+    *) return 0 ;;
+  esac
+}
+
+cmd_list_interactive() {
+  local main_path="$REPO_ROOT"
+  collect_worktree_rows
+  local n=${#_WT_PATHS[@]}
+  if [ "$n" -eq 0 ]; then warn "워크트리 없음"; return 0; fi
+
+  local idx=0 key i sel_path
+  tty_raw_on || { cmd_list_plain; return; }
+  while true; do
+    clear 2>/dev/null || printf '\033[2J\033[H'
+    echo "${C_BOLD}워크트리 선택${C_RESET} ${C_DIM}(↑↓ · Enter · q)${C_RESET}"
+    echo ""
+    for i in $(seq 0 $((n - 1))); do
+      local sel=0; [ "$i" -eq "$idx" ] && sel=1
+      _print_worktree_row "$i" "$sel" "$main_path"
+    done
+    echo ""
+    printf "${C_DIM}Enter: 액션 메뉴 · q: 종료${C_RESET}\n"
+    key="$(read_key)" || break
+    case "$key" in
+      $'\x1b[A'|$'\x1bOA'|'A'|'k') idx=$(( (idx + n - 1) % n )) ;;
+      $'\x1b[B'|$'\x1bOB'|'B'|'j') idx=$(( (idx + 1) % n )) ;;
+      ''|$'\n')
+        sel_path="${_WT_PATHS[$idx]}"
+        tty_raw_off
+        echo ""
+        worktree_action_menu "$sel_path"
+        return
+        ;;
+      q|Q|$'\x1b') break ;;
+    esac
+  done
+  tty_raw_off
+}
+
+cmd_list_plain() {
   local main_path
   main_path="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 
@@ -355,23 +659,35 @@ cmd_list() {
   fi
 }
 
+cmd_list() {
+  local opt_plain=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --plain|-p) opt_plain=1; shift ;;
+      -i|--interactive) opt_plain=0; shift ;;
+      *) err "Usage: cw list [--plain|-p]"; exit 1 ;;
+    esac
+  done
+  if [ "$opt_plain" -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
+    require_repo
+    cmd_list_interactive
+    return
+  fi
+  cmd_list_plain
+}
+
 _resolve_or_list() {
   local name="$1"
-  local wpath="${REPO_ROOT}/${WORKTREE_BASE}/${name}"
 
-  if [ -d "$wpath" ]; then
-    RESOLVED_PATH="$wpath"
+  if resolve_worktree_by_name "$name"; then
     return 0
   fi
 
-  err "워크트리 없음: ${wpath}"
-  local wbase="${REPO_ROOT}/${WORKTREE_BASE}"
+  err "워크트리 없음: ${name} ${C_DIM}(검색: ${WORKTREE_BASES[*]})${C_RESET}"
   local -a entries=()
-  if [ -d "$wbase" ]; then
-    while IFS= read -r d; do
-      entries+=("$(basename "$d")")
-    done < <(find "$wbase" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null)
-  fi
+  while IFS= read -r rel; do
+    [ -n "$rel" ] && entries+=("$rel")
+  done < <(list_managed_worktree_names | sort -u)
   if [ ${#entries[@]} -gt 0 ]; then
     info "사용 가능:"
     for e in "${entries[@]}"; do
@@ -381,6 +697,36 @@ _resolve_or_list() {
     warn "생성된 워크트리 없음"
   fi
   return 1
+}
+
+cmd_cd() {
+  if [ $# -lt 1 ]; then err "Usage: cw cd <name>"; exit 1; fi
+  if [ $# -gt 1 ]; then err "cd는 옵션을 받지 않아"; exit 1; fi
+  require_repo
+  _resolve_or_list "$1" || exit 1
+  printf 'cd %q\n' "$RESOLVED_PATH"
+}
+
+cmd_cursor() {
+  if [ $# -lt 1 ]; then err "Usage: cw cursor <name>"; exit 1; fi
+  if [ $# -gt 1 ]; then err "cursor는 옵션을 받지 않아"; exit 1; fi
+  require_repo
+  _resolve_or_list "$1" || exit 1
+  open_in_cursor "$RESOLVED_PATH"
+}
+
+cmd_name() {
+  if [ $# -lt 1 ]; then err "Usage: cw name <name>"; exit 1; fi
+  if [ $# -gt 1 ]; then err "name은 옵션을 받지 않아"; exit 1; fi
+  require_repo
+  _resolve_or_list "$1" || exit 1
+  local disp
+  disp="$(worktree_display_name "$RESOLVED_PATH")"
+  echo "$disp"
+
+  if [ -t 1 ] && copy_to_clipboard "$disp"; then
+    echo "${C_GRAY}(클립보드에 복사됨)${C_RESET}" >&2
+  fi
 }
 
 cmd_open() {
@@ -401,16 +747,8 @@ cmd_path() {
   echo "$RESOLVED_PATH"
 
   # 클립보드 복사 (TTY일 때만, 파이프/리다이렉트 시 스킵)
-  if [ -t 1 ] && [ -z "${NO_CLIPBOARD:-}" ]; then
-    local copier=""
-    if command -v pbcopy >/dev/null 2>&1; then copier="pbcopy"
-    elif command -v wl-copy >/dev/null 2>&1; then copier="wl-copy"
-    elif command -v xclip >/dev/null 2>&1; then copier="xclip -selection clipboard"
-    fi
-    if [ -n "$copier" ]; then
-      printf '%s' "$RESOLVED_PATH" | eval "$copier" 2>/dev/null && \
-        echo "${C_GRAY}(클립보드에 복사됨)${C_RESET}" >&2
-    fi
+  if [ -t 1 ] && copy_to_clipboard "$RESOLVED_PATH"; then
+    echo "${C_GRAY}(클립보드에 복사됨)${C_RESET}" >&2
   fi
 }
 
@@ -490,8 +828,11 @@ cmd_remove() {
 cmd_clean() {
   require_repo
 
-  local wbase="${REPO_ROOT}/${WORKTREE_BASE}"
-  if [ ! -d "$wbase" ]; then warn "워크트리 없음"; exit 0; fi
+  local any_base=0 base wbase
+  for base in "${WORKTREE_BASES[@]}"; do
+    if [ -d "${REPO_ROOT}/${base}" ]; then any_base=1; break; fi
+  done
+  if [ "$any_base" -eq 0 ]; then warn "워크트리 없음"; exit 0; fi
 
   local default_br
   default_br="${1:-$(merge_base_branch)}"
@@ -503,18 +844,18 @@ cmd_clean() {
   local is_tty=0
   [ -t 1 ] && is_tty=1
 
-  # 등록된 워크트리 (wbase 하위) — git이 진실의 원천. 중첩 경로(fix/ceoapp)도 그대로 인식
+  # 등록된 워크트리 (관리 베이스 하위) — git이 진실의 원천. 중첩 경로(fix/ceoapp)도 그대로 인식
   # porcelain 한 번에 파싱: path / branch / prunable 매핑 구축
   # (워크트리별 git -C 호출이 부모 워크트리로 walk up 하는 사고 방지)
   local -a registered=() reg_branches=() reg_prunable=()
   local _cur_path="" _cur_branch="" _cur_prunable=0
   _flush_wt() {
     [ -n "$_cur_path" ] || return 0
-    case "$_cur_path" in "$wbase"/*)
+    if is_managed_worktree_path "$_cur_path"; then
       registered+=("$_cur_path")
       reg_branches+=("$_cur_branch")
       reg_prunable+=("$_cur_prunable")
-    ;; esac
+    fi
     _cur_path=""; _cur_branch=""; _cur_prunable=0
   }
   while IFS= read -r line; do
@@ -528,21 +869,24 @@ cmd_clean() {
   _flush_wt
   unset -f _flush_wt
 
-  # stray = wbase 직속 디렉토리 중 등록된 워크트리의 부모도 자기 자신도 아닌 것
-  # 예) fix/ceoapp가 등록돼 있으면 fix/는 stray가 아님 (부모이므로)
+  # stray = 관리 베이스 직속 디렉토리 중 등록된 워크트리의 부모도 자기 자신도 아닌 것
   local -a strays=()
-  while IFS= read -r dir; do
-    [ -n "$dir" ] || continue
-    [ -d "$dir" ] || continue
-    local is_parent_or_self=0 r
-    for r in "${registered[@]+"${registered[@]}"}"; do
-      if [ "$r" = "$dir" ] || [[ "$r" == "$dir"/* ]]; then
-        is_parent_or_self=1
-        break
-      fi
-    done
-    [ "$is_parent_or_self" -eq 0 ] && strays+=("$dir")
-  done < <(find "$wbase" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+  for base in "${WORKTREE_BASES[@]}"; do
+    wbase="${REPO_ROOT}/${base}"
+    [ -d "$wbase" ] || continue
+    while IFS= read -r dir; do
+      [ -n "$dir" ] || continue
+      [ -d "$dir" ] || continue
+      local is_parent_or_self=0 r
+      for r in "${registered[@]+"${registered[@]}"}"; do
+        if [ "$r" = "$dir" ] || [[ "$r" == "$dir"/* ]]; then
+          is_parent_or_self=1
+          break
+        fi
+      done
+      [ "$is_parent_or_self" -eq 0 ] && strays+=("$dir")
+    done < <(find "$wbase" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+  done
 
   local total=$((${#registered[@]} + ${#strays[@]}))
   if [ "$total" -eq 0 ]; then
@@ -563,7 +907,7 @@ cmd_clean() {
   for wtpath in "${strays[@]+"${strays[@]}"}"; do
     idx=$((idx + 1))
     local name prefix
-    name="${wtpath#"$wbase"/}"
+    name="$(worktree_relative_name "$wtpath" 2>/dev/null || basename "$wtpath")"
     prefix="${C_DIM}[${idx}/${total}]${C_RESET}"
     spinner_start "[${idx}/${total}] 정리 중: ${name} (stray)"
     rm -rf "$wtpath"
@@ -578,7 +922,7 @@ cmd_clean() {
     i_reg=$((i_reg + 1))
     idx=$((idx + 1))
     local name branch prunable prefix
-    name="${wtpath#"$wbase"/}"
+    name="$(worktree_relative_name "$wtpath" 2>/dev/null || basename "$wtpath")"
     branch="${reg_branches[$i_reg]}"
     prunable="${reg_prunable[$i_reg]}"
     prefix="${C_DIM}[${idx}/${total}]${C_RESET}"
@@ -700,7 +1044,11 @@ cmd_clean() {
   [ "$is_tty" -eq 1 ] && printf '\r\033[K'
 
   # 중첩 워크트리(fix/ceoapp) 제거 후 비게 된 부모 디렉토리(fix/) 정리
-  find "$wbase" -mindepth 1 -depth -type d -empty -delete 2>/dev/null || true
+  for base in "${WORKTREE_BASES[@]}"; do
+    wbase="${REPO_ROOT}/${base}"
+    [ -d "$wbase" ] || continue
+    find "$wbase" -mindepth 1 -depth -type d -empty -delete 2>/dev/null || true
+  done
 
   git worktree prune 2>/dev/null
   echo ""
@@ -748,7 +1096,7 @@ cmd_move() {
   local name="$1" newname="$2"
   require_worktree "$name" || exit 1
   local wpath="$WPATH"
-  local newpath="${REPO_ROOT}/${WORKTREE_BASE}/${newname}"
+  local newpath="${REPO_ROOT}/${RESOLVED_BASE}/${newname}"
 
   if [ -e "$newpath" ]; then err "대상 경로 이미 존재: ${newpath}"; exit 1; fi
 
@@ -821,9 +1169,12 @@ cmd_repair() {
 
 case "${1:-help}" in
   add)    shift; cmd_add "$@" ;;
-  list)   cmd_list ;;
+  list)   shift; cmd_list "$@" ;;
   open)   shift; cmd_open "$@" ;;
   path)   shift; cmd_path "$@" ;;
+  cd)     shift; cmd_cd "$@" ;;
+  cursor) shift; cmd_cursor "$@" ;;
+  name)   shift; cmd_name "$@" ;;
   remove) shift; cmd_remove "$@" ;;
   clean)  shift; cmd_clean "$@" ;;
   lock)   shift; cmd_lock "$@" ;;
@@ -833,5 +1184,15 @@ case "${1:-help}" in
   repair) cmd_repair ;;
   --version|-v) echo "cw ${CW_VERSION}" ;;
   help|--help|-h) help ;;
-  *)      err "알 수 없는 명령: $1"; help ;;
+  *)
+    if [[ "${1:-}" != -* ]] && [ -n "${1:-}" ]; then
+      require_repo
+      if resolve_worktree_by_name "$1"; then
+        worktree_action_menu "$RESOLVED_PATH" "$1"
+        exit 0
+      fi
+    fi
+    err "알 수 없는 명령: $1"
+    help
+    ;;
 esac

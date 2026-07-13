@@ -204,9 +204,94 @@ t_list() {
   cw_run "$r" add a -n >/dev/null 2>&1
   cw_run "$r" add b -n >/dev/null 2>&1
   local out
-  out="$(cw_run "$r" list 2>&1)"
+  out="$(cw_run "$r" list --plain 2>&1)"
   assert_contains "$out" ".claude/worktrees/a" "list — a 포함"
   assert_contains "$out" ".claude/worktrees/b" "list — b 포함"
+}
+
+t_path_worktrees_base() {
+  local r="$1"
+  mkdir -p "$r/.worktrees"
+  git -C "$r" worktree add "$r/.worktrees/alt1" -b feature/alt1 main -q
+  local out
+  out="$(NO_CLIPBOARD=1 cw_run "$r" path alt1 2>/dev/null)"
+  assert_eq "$out" "$r/.worktrees/alt1" "path — .worktrees 베이스 resolve"
+  out="$(NO_CLIPBOARD=1 cw_run "$r" cd alt1 2>/dev/null)"
+  assert_contains "$out" ".worktrees/alt1" "cd — .worktrees 베이스 resolve"
+}
+
+t_name_worktrees_base() {
+  local r="$1"
+  mkdir -p "$r/.worktrees"
+  git -C "$r" worktree add "$r/.worktrees/alt1" -b feature/alt1 main -q
+  local out
+  out="$(NO_CLIPBOARD=1 cw_run "$r" name alt1 2>/dev/null)"
+  assert_eq "$out" "alt1" "name — .worktrees 상대 이름"
+
+  cw_run "$r" add nested/wt -n >/dev/null 2>&1
+  out="$(NO_CLIPBOARD=1 cw_run "$r" name nested/wt 2>/dev/null)"
+  assert_eq "$out" "nested/wt" "name — 중첩 상대 이름"
+}
+
+# .worktrees 베이스에 git worktree add (cw add는 .claude/worktrees만 생성)
+_add_worktree_at_base() {
+  local r="$1" base="$2" name="$3" branch="${4:-worktrees-${name}}"
+  mkdir -p "$r/${base}"
+  git -C "$r" worktree add "$r/${base}/${name}" -b "$branch" main -q
+}
+
+t_remove_worktrees_base() {
+  local r="$1"
+  _add_worktree_at_base "$r" ".worktrees" "wt-rm" "worktrees-wt-rm"
+  cw_run "$r" remove wt-rm >/dev/null 2>&1
+  assert_dir_missing "$r/.worktrees/wt-rm" "remove — .worktrees 디렉토리 삭제"
+  assert_branch_missing "$r" "worktrees-wt-rm" "remove — .worktrees 브랜치 삭제"
+}
+
+t_remove_worktrees_dirty_force() {
+  local r="$1"
+  _add_worktree_at_base "$r" ".worktrees" "wt-dirty" "worktrees-wt-dirty"
+  echo dirty > "$r/.worktrees/wt-dirty/dirty.txt"
+  cw_run "$r" remove wt-dirty -f >/dev/null 2>&1
+  assert_dir_missing "$r/.worktrees/wt-dirty" "remove -f — .worktrees dirty 삭제"
+}
+
+t_clean_worktrees_merged() {
+  local r="$1"
+  local wp="$r/.worktrees/wt-clean"
+  _add_worktree_at_base "$r" ".worktrees" "wt-clean" "worktrees-wt-clean"
+  echo m > "$wp/m.txt"
+  git -C "$wp" add m.txt
+  git -C "$wp" commit -q -m "m"
+  git -C "$r" merge --ff-only worktrees-wt-clean -q
+  cw_run "$r" clean main >/dev/null 2>&1
+  assert_dir_missing "$wp" "clean — .worktrees 머지 워크트리 삭제"
+  assert_branch_missing "$r" "worktrees-wt-clean" "clean — .worktrees 머지 브랜치 삭제"
+}
+
+t_clean_worktrees_stray() {
+  local r="$1"
+  mkdir -p "$r/.worktrees"
+  mkdir -p "$r/.worktrees/orphan-wt"
+  echo x > "$r/.worktrees/orphan-wt/x"
+  cw_run "$r" clean main >/dev/null 2>&1
+  assert_dir_missing "$r/.worktrees/orphan-wt" "clean — .worktrees stray 삭제"
+}
+
+t_clean_mixed_bases() {
+  local r="$1"
+  cw_run "$r" add claude-wt -n >/dev/null 2>&1
+  local wp1="$r/.claude/worktrees/claude-wt"
+  echo a > "$wp1/a.txt" && git -C "$wp1" add a.txt && git -C "$wp1" commit -q -m a
+  git -C "$r" merge --ff-only worktrees-claude-wt -q
+  # 두 번째 워크트리는 첫 머지 반영된 main에서 생성 → ff 머지 가능
+  _add_worktree_at_base "$r" ".worktrees" "dot-wt" "worktrees-dot-wt"
+  local wp2="$r/.worktrees/dot-wt"
+  echo b > "$wp2/b.txt" && git -C "$wp2" add b.txt && git -C "$wp2" commit -q -m b
+  git -C "$r" merge --ff-only worktrees-dot-wt -q
+  cw_run "$r" clean main >/dev/null 2>&1
+  assert_dir_missing "$wp1" "mixed bases — .claude/worktrees 삭제"
+  assert_dir_missing "$wp2" "mixed bases — .worktrees 삭제"
 }
 
 t_path() {
@@ -544,16 +629,23 @@ run_test "add detached HEAD"            t_add_detached
 run_test "add lock 옵션"                t_add_locked
 run_test "add -n 경로 출력"             t_add_no_open_outputs_path
 run_test "list"                         t_list
+run_test "path .worktrees 베이스"       t_path_worktrees_base
+run_test "name + 클립보드"              t_name_worktrees_base
 run_test "path"                         t_path
 run_test "path 없는 이름"               t_path_nonexistent
 run_test "lock + unlock"                t_lock_unlock
 run_test "lock이 remove 차단"           t_lock_blocks_remove
 run_test "move (이름 변경)"             t_move
 run_test "remove 깨끗"                  t_remove_clean
+run_test "remove .worktrees"              t_remove_worktrees_base
+run_test "remove .worktrees -f dirty"     t_remove_worktrees_dirty_force
 run_test "remove dirty 거부"            t_remove_dirty_refused
 run_test "remove -f dirty"              t_remove_dirty_force
 run_test "remove unmerged 거부"         t_remove_unmerged_refused
 run_test "clean 머지된 워크트리"        t_clean_merged_removed
+run_test "clean .worktrees 머지"          t_clean_worktrees_merged
+run_test "clean .worktrees stray"       t_clean_worktrees_stray
+run_test "clean 양쪽 베이스 혼합"       t_clean_mixed_bases
 run_test "[회귀] clean 미작업 보존"     t_clean_skips_untouched_branch
 run_test "[회귀] clean dirty+옛base"    t_clean_dirty_old_base_kept
 run_test "[회귀] clean 옛base 작업없음" t_clean_old_base_no_work_kept

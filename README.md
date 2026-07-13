@@ -92,10 +92,23 @@ cw open my-feature       # claude 실행
 cw path my-feature       # 경로 출력 + 클립보드 복사
 ```
 
-### 목록
+### 목록 / 선택
 ```bash
-cw list
+cw list                          # TTY: ↑↓로 선택 → Cursor/claude/cd/복사
+cw list --plain                  # 스크립트용 텍스트 목록
+cw BMSQUARE-15764                # 이름만 입력 → 액션 메뉴
+cw cursor BMSQUARE-15764         # Cursor에서 열기
+cw name BMSQUARE-15764           # 워크트리 이름 출력 + 클립보드
+eval "$(cw cd BMSQUARE-15764)"   # 현재 쉘에서 이동
 ```
+
+`cw`는 `.claude/worktrees/`와 `.worktrees/` 모두에서 워크트리를 찾습니다.  
+`remove`, `clean`, `lock`, `move` 등 관리 명령도 **양쪽 베이스 모두** 적용됩니다.  
+`cw add`로 새로 만드는 워크트리는 기본적으로 `.claude/worktrees/`에 생성됩니다.
+
+### 목록 출력 예
+```bash
+cw list --plain
 ```
 ~/work/project                                082c77b7ec  [main]
 ~/work/project/.claude/worktrees/mobile-gnb   ce52264285  [feature/...] 🔒 locked
