@@ -4,7 +4,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-CW_VERSION="0.1.14"
+CW_VERSION="0.1.15"
 DEFAULT_WORKTREE_BASE=".claude/worktrees"
 # resolve/clean 대상 — 앞쪽이 우선 (.claude/worktrees → .worktrees)
 WORKTREE_BASES=(".claude/worktrees" ".worktrees")
@@ -52,8 +52,8 @@ spinner_stop() {
   [ -t 1 ] && printf '\r\033[K'
 }
 
-# 인터럽트/종료 시 스피너 정리
-trap 'spinner_stop' EXIT INT TERM
+# 인터럽트/종료 시 스피너·커서 정리
+trap 'spinner_stop; printf "\033[?25h" > /dev/tty 2>/dev/null || true' EXIT INT TERM
 
 help() {
   cat <<EOF
@@ -363,11 +363,28 @@ tty_raw_on() {
   _tty_saved="$(stty -g 2>/dev/null || true)"
   # min 1 time 0: 1바이트 올 때까지 블록 (bash 3.2 호환)
   stty -echo -icanon min 1 time 0 2>/dev/null || return 1
+  # 커서 숨김 — 전체 clear 반복 시 깜빡임 완화
+  printf '\033[?25l' > /dev/tty 2>/dev/null || true
 }
 
 tty_raw_off() {
+  printf '\033[?25h' > /dev/tty 2>/dev/null || true
   [ -n "${_tty_saved:-}" ] && stty "$_tty_saved" 2>/dev/null || true
   _tty_saved=""
+}
+
+# 화면 갱신: clear(1) 대신 홈+이하 삭제 (깜빡임 적음). UI는 항상 /dev/tty.
+ui_redraw_start() {
+  printf '\033[H\033[J' > /dev/tty
+}
+
+ui_puts() {
+  printf '%s\n' "$*" > /dev/tty
+}
+
+ui_printf() {
+  # shellcheck disable=SC2059
+  printf "$@" > /dev/tty
 }
 
 # 키 1회 읽기 → REPLY_KEY.
@@ -498,51 +515,53 @@ _print_worktree_row() {
   local path="${_WT_PATHS[$idx]}"
   local branch="${_WT_BRANCHES[$idx]:-}"
   local sha="${_WT_SHAS[$idx]:-}"
-  local disp prefix branch_out status=""
+  local disp branch_out status=""
   disp="$(_tilde_path "$path")"
 
-  if [ "$selected" -eq 1 ]; then printf "  ${C_BOLD}${C_CYAN}> "
-  else printf "    "; fi
+  if [ "$selected" -eq 1 ]; then ui_printf "  ${C_BOLD}${C_CYAN}> "
+  else ui_printf "    "; fi
 
   if [ "$path" = "$main_path" ]; then
-    printf '%s%s%s' "$C_GREEN" "$disp" "$C_RESET"
+    ui_printf '%s%s%s' "$C_GREEN" "$disp" "$C_RESET"
   else
-    printf '%s%s%s' "$C_DIM" "$disp" "$C_RESET"
+    ui_printf '%s%s%s' "$C_DIM" "$disp" "$C_RESET"
   fi
-  printf '  %s%s%s  ' "$C_DIM" "$sha" "$C_RESET"
+  ui_printf '  %s%s%s  ' "$C_DIM" "$sha" "$C_RESET"
   if [ -n "$branch" ]; then branch_out="${C_CYAN}[${branch}]${C_RESET}"
   else branch_out="${C_YELLOW}[detached]${C_RESET}"; fi
   [ "${_WT_LOCKED[$idx]:-0}" = "1" ] && status="${status} ${C_YELLOW}🔒 locked${C_RESET}"
   [ "${_WT_PRUNABLE[$idx]:-0}" = "1" ] && status="${status} ${C_RED}⚠ prunable${C_RESET}"
   [ "${_WT_BARE[$idx]:-0}" = "1" ] && status="${status} ${C_GRAY}(bare)${C_RESET}"
-  printf '%s%s\n' "$branch_out" "$status"
+  ui_printf '%s%s\n' "$branch_out" "$status"
 }
 
+# 선택 결과를 REPLY_PICK에 저장. UI는 /dev/tty로만 출력 (커맨드 치환 오염 방지).
 menu_pick() {
   local title="$1"
   shift
   local -a items=("$@")
-  local n=${#items[@]} idx=0 key i pick
+  local n=${#items[@]} idx=0 i
+  REPLY_PICK=""
   [ "$n" -gt 0 ] || return 1
   tty_raw_on || return 1
   while true; do
-    clear 2>/dev/null || printf '\033[2J\033[H'
-    echo "${C_BOLD}${title}${C_RESET}"
-    echo ""
+    ui_redraw_start
+    ui_puts "${C_BOLD}${title}${C_RESET}"
+    ui_puts ""
     for i in $(seq 0 $((n - 1))); do
       if [ "$i" -eq "$idx" ]; then
-        printf "  ${C_BOLD}${C_CYAN}> %s${C_RESET}\n" "${items[$i]}"
+        ui_printf "  ${C_BOLD}${C_CYAN}> %s${C_RESET}\n" "${items[$i]}"
       else
-        printf "    %s\n" "${items[$i]}"
+        ui_printf "    %s\n" "${items[$i]}"
       fi
     done
-    echo ""
-    printf "${C_DIM}↑↓ 이동 · Enter 선택 · q 취소${C_RESET}\n"
+    ui_puts ""
+    ui_printf "${C_DIM}↑↓ 이동 · Enter 선택 · q 취소${C_RESET}\n"
     read_key || { tty_raw_off; return 1; }
     case "$REPLY_KEY" in
       $'\x1b[A'|$'\x1bOA'|k) idx=$(( (idx + n - 1) % n )) ;;
       $'\x1b[B'|$'\x1bOB'|j) idx=$(( (idx + 1) % n )) ;;
-      $'\n') tty_raw_off; echo "$idx"; return 0 ;;
+      $'\n') tty_raw_off; REPLY_PICK="$idx"; return 0 ;;
       q|Q|$'\x1b') tty_raw_off; return 1 ;;
     esac
   done
@@ -562,10 +581,11 @@ worktree_action_menu() {
     "cd 명령 출력"
     "취소"
   )
-  local pick disp_name
+  local disp_name
   disp_name="$(worktree_display_name "$wpath")"
-  pick="$(menu_pick "무엇을 할까요? $(_tilde_path "$wpath")" "${actions[@]}")" || return 0
-  case "$pick" in
+  # 절대 pick="$(menu_pick ...)" 쓰지 말 것 — UI stdout이 결과에 섞임
+  menu_pick "무엇을 할까요? $(_tilde_path "$wpath")" "${actions[@]}" || return 0
+  case "$REPLY_PICK" in
     0) open_in_cursor "$wpath" ;;
     1)
       require_claude
@@ -596,18 +616,18 @@ cmd_list_interactive() {
   local n=${#_WT_PATHS[@]}
   if [ "$n" -eq 0 ]; then warn "워크트리 없음"; return 0; fi
 
-  local idx=0 key i sel_path
+  local idx=0 i sel_path
   tty_raw_on || { cmd_list_plain; return; }
   while true; do
-    clear 2>/dev/null || printf '\033[2J\033[H'
-    echo "${C_BOLD}워크트리 선택${C_RESET} ${C_DIM}(↑↓ · Enter · q)${C_RESET}"
-    echo ""
+    ui_redraw_start
+    ui_printf "${C_BOLD}워크트리 선택${C_RESET} ${C_DIM}(↑↓ · Enter · q)${C_RESET}\n"
+    ui_puts ""
     for i in $(seq 0 $((n - 1))); do
       local sel=0; [ "$i" -eq "$idx" ] && sel=1
       _print_worktree_row "$i" "$sel" "$main_path"
     done
-    echo ""
-    printf "${C_DIM}Enter: 액션 메뉴 · q: 종료${C_RESET}\n"
+    ui_puts ""
+    ui_printf "${C_DIM}Enter: 액션 메뉴 · q: 종료${C_RESET}\n"
     read_key || break
     case "$REPLY_KEY" in
       $'\x1b[A'|$'\x1bOA'|k) idx=$(( (idx + n - 1) % n )) ;;
