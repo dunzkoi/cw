@@ -214,4 +214,4 @@ WT="$1"
 
 - **Darwin/Linux 대상** (Windows 미지원)
 - `claude` CLI가 PATH에 있어야 `open`/`add` 기본 동작 가능 (`--no-open`으로 우회)
-- 모든 워크트리는 `.claude/worktrees/<folder>` 규칙으로 고정 (다른 경로는 `git worktree` 직접 사용)
+- `cw add` 생성 경로는 `.claude/worktrees/<folder>` 고정. 조회/정리/잠금은 `.worktrees/`도 인식

@@ -179,10 +179,7 @@ require_claude() {
 
 require_worktree() {
   local name="$1"
-  if resolve_worktree_by_name "$name"; then
-    WPATH="$RESOLVED_PATH"
-    return 0
-  fi
+  resolve_worktree_by_name "$name" && return 0
   err "워크트리 없음: ${name} ${C_DIM}(검색: ${WORKTREE_BASES[*]})${C_RESET}"
   return 1
 }
@@ -238,21 +235,14 @@ repo_default_branch() {
 }
 
 # 머지 기준 브랜치: 메인 워크트리의 현재 브랜치 > repo_default_branch
+# require_repo 이후 호출 전제 (REPO_ROOT 사용)
 merge_base_branch() {
-  local main_wt_path main_br
-  main_wt_path="$(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print $2; exit}')"
-  if [ -n "$main_wt_path" ] && [ -d "$main_wt_path" ]; then
-    main_br="$(git -C "$main_wt_path" branch --show-current 2>/dev/null || true)"
+  local main_br
+  if [ -n "${REPO_ROOT:-}" ] && [ -d "$REPO_ROOT" ]; then
+    main_br="$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || true)"
     if [ -n "$main_br" ]; then echo "$main_br"; return; fi
   fi
   repo_default_branch
-}
-
-# 안전한 디렉토리 목록 (공백/특수문자 OK)
-list_worktree_dirs() {
-  local wbase="$1"
-  [ -d "$wbase" ] || return
-  find "$wbase" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null
 }
 
 cmd_add() {
@@ -442,10 +432,6 @@ copy_to_clipboard() {
   fi
   [ -n "$copier" ] || return 1
   printf '%s' "$text" | eval "$copier" 2>/dev/null
-}
-
-copy_path_clipboard() {
-  copy_to_clipboard "$1"
 }
 
 # 관리 베이스 상대 이름 > 현재 브랜치 > basename
@@ -711,7 +697,6 @@ cmd_list() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --plain|-p) opt_plain=1; shift ;;
-      -i|--interactive) opt_plain=0; shift ;;
       *) err "Usage: cw list [--plain|-p]"; exit 1 ;;
     esac
   done
@@ -746,54 +731,49 @@ _resolve_or_list() {
   return 1
 }
 
-cmd_cd() {
-  if [ $# -lt 1 ]; then err "Usage: cw cd <name>"; exit 1; fi
-  if [ $# -gt 1 ]; then err "cd는 옵션을 받지 않아"; exit 1; fi
+# 단일 <name> 인자 명령 공통: Usage 검사 → resolve. 실패 시 exit.
+require_named() {
+  local cmd="$1"; shift
+  [ $# -ge 1 ] || { err "Usage: cw ${cmd} <name>"; exit 1; }
+  [ $# -eq 1 ] || { err "${cmd}는 옵션을 받지 않아"; exit 1; }
   require_repo
   _resolve_or_list "$1" || exit 1
+}
+
+cmd_cd() {
+  require_named cd "$@"
   printf 'cd %q\n' "$RESOLVED_PATH"
 }
 
 cmd_cursor() {
-  if [ $# -lt 1 ]; then err "Usage: cw cursor <name>"; exit 1; fi
-  if [ $# -gt 1 ]; then err "cursor는 옵션을 받지 않아"; exit 1; fi
-  require_repo
-  _resolve_or_list "$1" || exit 1
+  require_named cursor "$@"
   open_in_cursor "$RESOLVED_PATH"
 }
 
 cmd_name() {
-  if [ $# -lt 1 ]; then err "Usage: cw name <name>"; exit 1; fi
-  if [ $# -gt 1 ]; then err "name은 옵션을 받지 않아"; exit 1; fi
-  require_repo
-  _resolve_or_list "$1" || exit 1
+  require_named name "$@"
   local disp
   disp="$(worktree_display_name "$RESOLVED_PATH")"
   echo "$disp"
-
   if [ -t 1 ] && copy_to_clipboard "$disp"; then
     echo "${C_GRAY}(클립보드에 복사됨)${C_RESET}" >&2
   fi
 }
 
 cmd_open() {
-  if [ $# -lt 1 ]; then err "Usage: cw open <name>"; exit 1; fi
-  if [ $# -gt 1 ]; then err "open은 옵션을 받지 않아. 경로만 필요하면 'cw path <name>' 사용"; exit 1; fi
-  require_repo
-  _resolve_or_list "$1" || exit 1
+  if [ $# -gt 1 ]; then
+    err "open은 옵션을 받지 않아. 경로만 필요하면 'cw path <name>' 사용"
+    exit 1
+  fi
+  require_named open "$@"
   require_claude
   cd "$RESOLVED_PATH"
   exec claude --dangerously-skip-permissions
 }
 
 cmd_path() {
-  if [ $# -lt 1 ]; then err "Usage: cw path <name>"; exit 1; fi
-  if [ $# -gt 1 ]; then err "path는 옵션을 받지 않아"; exit 1; fi
-  require_repo
-  _resolve_or_list "$1" || exit 1
+  require_named path "$@"
   echo "$RESOLVED_PATH"
-
-  # 클립보드 복사 (TTY일 때만, 파이프/리다이렉트 시 스킵)
   if [ -t 1 ] && copy_to_clipboard "$RESOLVED_PATH"; then
     echo "${C_GRAY}(클립보드에 복사됨)${C_RESET}" >&2
   fi
@@ -820,7 +800,7 @@ cmd_remove() {
 
   local name="${positional[0]}"
   require_worktree "$name" || exit 1
-  local wpath="$WPATH"
+  local wpath="$RESOLVED_PATH"
 
   local branch
   branch="$(git -C "$wpath" branch --show-current 2>/dev/null || true)"
@@ -891,30 +871,18 @@ cmd_clean() {
   local is_tty=0
   [ -t 1 ] && is_tty=1
 
-  # 등록된 워크트리 (관리 베이스 하위) — git이 진실의 원천. 중첩 경로(fix/ceoapp)도 그대로 인식
-  # porcelain 한 번에 파싱: path / branch / prunable 매핑 구축
+  # 등록된 워크트리 (관리 베이스 하위) — collect_worktree_rows 재사용
   # (워크트리별 git -C 호출이 부모 워크트리로 walk up 하는 사고 방지)
+  collect_worktree_rows
   local -a registered=() reg_branches=() reg_prunable=()
-  local _cur_path="" _cur_branch="" _cur_prunable=0
-  _flush_wt() {
-    [ -n "$_cur_path" ] || return 0
-    if is_managed_worktree_path "$_cur_path"; then
-      registered+=("$_cur_path")
-      reg_branches+=("$_cur_branch")
-      reg_prunable+=("$_cur_prunable")
+  local i n_all=${#_WT_PATHS[@]}
+  for (( i=0; i<n_all; i++ )); do
+    if is_managed_worktree_path "${_WT_PATHS[$i]}"; then
+      registered+=("${_WT_PATHS[$i]}")
+      reg_branches+=("${_WT_BRANCHES[$i]}")
+      reg_prunable+=("${_WT_PRUNABLE[$i]}")
     fi
-    _cur_path=""; _cur_branch=""; _cur_prunable=0
-  }
-  while IFS= read -r line; do
-    case "$line" in
-      "worktree "*)        _flush_wt; _cur_path="${line#worktree }" ;;
-      "branch refs/heads/"*) _cur_branch="${line#branch refs/heads/}" ;;
-      "detached")          _cur_branch="" ;;
-      "prunable"*)         _cur_prunable=1 ;;
-    esac
-  done < <(git worktree list --porcelain 2>/dev/null)
-  _flush_wt
-  unset -f _flush_wt
+  done
 
   # stray = 관리 베이스 직속 디렉토리 중 등록된 워크트리의 부모도 자기 자신도 아닌 것
   local -a strays=()
@@ -1118,12 +1086,11 @@ cmd_lock() {
   local name="$1"
   local reason="${2:-}"
   require_worktree "$name" || exit 1
-  local wpath="$WPATH"
 
   if [ -n "$reason" ]; then
-    git worktree lock "$wpath" --reason "$reason" && ok "잠금: ${C_BOLD}${name}${C_RESET} — ${C_DIM}${reason}${C_RESET}"
+    git worktree lock "$RESOLVED_PATH" --reason "$reason" && ok "잠금: ${C_BOLD}${name}${C_RESET} — ${C_DIM}${reason}${C_RESET}"
   else
-    git worktree lock "$wpath" && ok "잠금: ${C_BOLD}${name}${C_RESET}"
+    git worktree lock "$RESOLVED_PATH" && ok "잠금: ${C_BOLD}${name}${C_RESET}"
   fi
 }
 
@@ -1133,7 +1100,7 @@ cmd_unlock() {
 
   local name="$1"
   require_worktree "$name" || exit 1
-  git worktree unlock "$WPATH" && ok "잠금 해제: ${C_BOLD}${name}${C_RESET}"
+  git worktree unlock "$RESOLVED_PATH" && ok "잠금 해제: ${C_BOLD}${name}${C_RESET}"
 }
 
 cmd_move() {
@@ -1142,12 +1109,11 @@ cmd_move() {
 
   local name="$1" newname="$2"
   require_worktree "$name" || exit 1
-  local wpath="$WPATH"
   local newpath="${REPO_ROOT}/${RESOLVED_BASE}/${newname}"
 
   if [ -e "$newpath" ]; then err "대상 경로 이미 존재: ${newpath}"; exit 1; fi
 
-  git worktree move "$wpath" "$newpath" && ok "이동: ${C_BOLD}${name}${C_RESET} → ${C_BOLD}${newname}${C_RESET}"
+  git worktree move "$RESOLVED_PATH" "$newpath" && ok "이동: ${C_BOLD}${name}${C_RESET} → ${C_BOLD}${newname}${C_RESET}"
 }
 
 cmd_prune() {
