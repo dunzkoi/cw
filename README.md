@@ -140,10 +140,10 @@ cw clean main                    # 기준 브랜치 명시 override
 
 `clean` 정책:
 - 대상: `git worktree list`의 **모든 linked worktree** (메인·bare 제외). `.claude/worktrees`, `.worktrees`, `orca/workspaces/...` 등 경로 무관
-- 머지된 브랜치 → 워크트리 + 브랜치 둘 다 삭제
-- 잠긴 워크트리 → 스킵
-- detached HEAD → HEAD 커밋이 기준 브랜치 ancestor면 삭제, 아니면 유지
-- 머지 안 됨 → 유지 (끝에 `cw remove <name> -f` 힌트 출력)
+- 머지 판정: `git cherry`(patch-id) — rebase/cherry-pick 흡수분 포함. tip≠기준 tip이면 빈 reflog여도 삭제
+- tip==기준 tip + reflog≤1 → 방금 만든 미작업으로 유지
+- 잠긴·dirty·머지 안 됨 → 스킵 (끝에 `cw remove <name> -f` 힌트)
+- detached HEAD → HEAD가 기준 브랜치 ancestor면 삭제(dirty면 유지)
 - stray 디렉토리 삭제는 관리 베이스(`.claude/worktrees`, `.worktrees`) 안에서만
 
 ```bash

@@ -4,7 +4,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-CW_VERSION="0.1.17"
+CW_VERSION="0.1.18"
 DEFAULT_WORKTREE_BASE=".claude/worktrees"
 # resolve/clean 대상 — 앞쪽이 우선 (.claude/worktrees → .worktrees)
 WORKTREE_BASES=(".claude/worktrees" ".worktrees")
@@ -1026,11 +1026,11 @@ cmd_clean() {
       continue
     fi
 
-    # patch-id 기반 머지 판정 (ancestor + rebase 모두 커버, squash는 한계).
-    # 주의: false-positive 위험 — 옛 main commit에 머문 브랜치도 cherry가 빈 출력 →
-    # "merged"로 판정될 수 있음. 따라서 삭제 전 두 가드 통과 필수:
-    #   (1) 워크트리에 uncommitted 변경 없음 (dirty 검사)
-    #   (2) 브랜치 reflog에 자체 commit 흔적이 있음 (refcount > 1)
+    # patch-id 기반 머지 판정 (ancestor + rebase/cherry-pick 커버, squash 다→1은 한계).
+    # 삭제 전 가드:
+    #   (1) dirty 없음
+    #   (2) tip ≠ 기준 tip → patch-merged/옛 tip 흡수 → 삭제 (reflog 무시: 빈 reflog false-negative 방지)
+    #   (3) tip == 기준 tip → 미작업 vs 방금 ff-merge. reflog>1 이면 삭제, ≤1·빈 reflog면 유지
     if is_effectively_merged "$branch" "$default_br"; then
       # 보호 1: dirty 워크트리 (작업 중)는 절대 자동 삭제 금지
       local dirty
@@ -1042,16 +1042,18 @@ cmd_clean() {
         skipped=$((skipped + 1))
         continue
       fi
-      # 보호 2: 브랜치 reflog가 생성 1줄뿐이면 자체 commit 흔적 없음 → 보존
-      # (cw add 직후, 또는 옛 base에서 만들어진 후 작업 안 한 케이스 모두 커버.
-      # ff-merge 후에는 reflog 2+ 라 정상 정리가 진행됨.)
-      local refcount
-      refcount="$(git reflog show "$branch" 2>/dev/null | wc -l | tr -d ' ')"
-      if [ "${refcount:-0}" -le 1 ]; then
-        [ "$is_tty" -eq 1 ] && printf '\r\033[K'
-        skip "${prefix} 유지: ${name} (${branch}) — 자체 commit 흔적 없음"
-        skipped=$((skipped + 1))
-        continue
+      local br_sha base_sha
+      br_sha="$(git rev-parse "$branch" 2>/dev/null || true)"
+      base_sha="$(git rev-parse "$default_br" 2>/dev/null || true)"
+      if [ -n "$br_sha" ] && [ -n "$base_sha" ] && [ "$br_sha" = "$base_sha" ]; then
+        local refcount
+        refcount="$(git reflog show "$branch" 2>/dev/null | wc -l | tr -d ' ')"
+        if [ "${refcount:-0}" -le 1 ]; then
+          [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+          skip "${prefix} 유지: ${name} (${branch}) — 기준 브랜치 tip과 동일 (미작업)"
+          skipped=$((skipped + 1))
+          continue
+        fi
       fi
       spinner_start "[${idx}/${total}] 정리 중: ${name} (${branch}, 워크트리 삭제)"
       local _rc=0

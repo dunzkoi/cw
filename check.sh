@@ -445,9 +445,9 @@ t_clean_dirty_old_base_kept() {
   assert_branch_exists "$r" "feature/stale" "[회귀] clean — 옛 base 브랜치 보존"
 }
 
-# 회귀 테스트: 옛 main commit에 머문 브랜치 + dirty 없음 + reflog 1줄 → 보존
-# (작업 시작 안 한 stale 워크트리)
-t_clean_old_base_no_work_kept() {
+# 회귀: 옛 main tip에 머문 미작업 브랜치(tip≠main, cherry0) → 삭제
+# (reflog 가드는 빈 reflog에서 patch-merged를 막아서 제거함. tip==main 만 미작업 유지.)
+t_clean_old_base_no_work_removed() {
   local r="$1"
   cw_run "$r" add stale2 feature/stale2 -n >/dev/null 2>&1
   cw_run "$r" add advancer2 -n >/dev/null 2>&1
@@ -456,9 +456,28 @@ t_clean_old_base_no_work_kept() {
   git -C "$r/.claude/worktrees/advancer2" commit -q -m "advance"
   git -C "$r" merge --ff-only worktrees-advancer2 -q
   cw_run "$r" clean >/dev/null 2>&1
-  assert_dir_exists "$r/.claude/worktrees/stale2" \
-    "[회귀] clean — 옛 base 위치 + 작업 없음 보존 (refcount<=1)"
-  assert_branch_exists "$r" "feature/stale2" "[회귀] clean — 옛 base 브랜치 보존"
+  assert_dir_missing "$r/.claude/worktrees/stale2" \
+    "[회귀] clean — 옛 base 미작업(tip≠main) 삭제"
+  assert_branch_missing "$r" "feature/stale2" "[회귀] clean — 옛 base 미작업 브랜치 삭제"
+}
+
+# patch-equivalent(머지됨) + 빈 reflog → 삭제 (ceo-front 15764 케이스)
+t_clean_patch_merged_empty_reflog() {
+  local r="$1"
+  cw_run "$r" add pm1 -n >/dev/null 2>&1
+  local wp="$r/.claude/worktrees/pm1"
+  echo y > "$wp/y.txt"
+  git -C "$wp" add y.txt
+  git -C "$wp" commit -q -m "feature y"
+  echo m > "$r/m.txt"
+  git -C "$r" add m.txt
+  git -C "$r" commit -q -m "main side"
+  git -C "$r" cherry-pick --quiet worktrees-pm1 >/dev/null 2>&1
+  # reflog 비우기 — 실환경(복사/만료)에서 0줄인 경우 재현
+  : > "$(git -C "$r" rev-parse --git-common-dir)/logs/refs/heads/worktrees-pm1"
+  cw_run "$r" clean >/dev/null 2>&1
+  assert_dir_missing "$wp" "[회귀] clean — patch-merged + 빈 reflog 삭제"
+  assert_branch_missing "$r" "worktrees-pm1" "[회귀] clean — patch-merged 브랜치 삭제"
 }
 
 # 회귀 테스트 (v0.1.10 — 사용자 LMS 케이스):
@@ -685,7 +704,8 @@ run_test "clean .worktrees stray"       t_clean_worktrees_stray
 run_test "clean 양쪽 베이스 혼합"       t_clean_mixed_bases
 run_test "[회귀] clean 미작업 보존"     t_clean_skips_untouched_branch
 run_test "[회귀] clean dirty+옛base"    t_clean_dirty_old_base_kept
-run_test "[회귀] clean 옛base 작업없음" t_clean_old_base_no_work_kept
+run_test "[회귀] clean 옛base 미작업삭제" t_clean_old_base_no_work_removed
+run_test "[회귀] clean patch+빈reflog"  t_clean_patch_merged_empty_reflog
 run_test "[회귀] clean rebase 머지"     t_clean_rebase_merged_removed
 run_test "[회귀] clean detached dirty"  t_clean_detached_dirty_kept
 run_test "clean 머지 안 된 보존"        t_clean_unmerged_kept
