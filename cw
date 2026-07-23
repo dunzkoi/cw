@@ -4,7 +4,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-CW_VERSION="0.1.16"
+CW_VERSION="0.1.17"
 DEFAULT_WORKTREE_BASE=".claude/worktrees"
 # resolve/clean 대상 — 앞쪽이 우선 (.claude/worktrees → .worktrees)
 WORKTREE_BASES=(".claude/worktrees" ".worktrees")
@@ -69,7 +69,7 @@ ${C_BOLD}Commands:${C_RESET}
   ${C_CYAN}cursor${C_RESET} <name>                  Cursor에서 워크트리 열기
   ${C_CYAN}name${C_RESET} <name>                    워크트리 이름 출력 + 클립보드 복사
   ${C_CYAN}remove${C_RESET} <name> [-f|--force]     특정 워크트리 삭제 (브랜치 포함)
-  ${C_CYAN}clean${C_RESET} [base]                    머지된 워크트리 일괄 정리 (기본: 메인 워크트리의 현재 브랜치)
+  ${C_CYAN}clean${C_RESET} [base]                    머지된 워크트리 일괄 정리 (git worktree 전체, 메인 제외)
   ${C_CYAN}lock${C_RESET} <name> [reason]           워크트리 잠금 (삭제 방지)
   ${C_CYAN}unlock${C_RESET} <name>                   워크트리 잠금 해제
   ${C_CYAN}move${C_RESET} <name> <new-name>          워크트리 이름 변경
@@ -145,9 +145,21 @@ worktree_relative_name() {
   return 1
 }
 
+# clean/로그용 라벨: 관리 베이스 상대경로 > basename (orca 등 외부 경로)
+worktree_label() {
+  local path="$1" name
+  name="$(worktree_relative_name "$path" 2>/dev/null || true)"
+  if [ -n "$name" ]; then
+    printf '%s' "$name"
+  else
+    basename "$path"
+  fi
+}
+
 # RESOLVED_PATH / RESOLVED_BASE / RESOLVED_NAME 설정. 없으면 1.
+# 1) 관리 베이스 경로 우선  2) git worktree list 전역 basename/상대이름 매칭
 resolve_worktree_by_name() {
-  local name="$1" base wpath
+  local name="$1" base wpath wtpath rel label
   RESOLVED_PATH=""
   RESOLVED_BASE=""
   RESOLVED_NAME=""
@@ -160,16 +172,30 @@ resolve_worktree_by_name() {
       return 0
     fi
   done
+  # orca/workspaces 등 관리 베이스 밖 linked worktree
+  while IFS= read -r wtpath; do
+    [ -n "$wtpath" ] || continue
+    [ "$wtpath" = "$REPO_ROOT" ] && continue
+    [ -d "$wtpath" ] || continue
+    rel="$(worktree_relative_name "$wtpath" 2>/dev/null || true)"
+    label="$(basename "$wtpath")"
+    if [ "$rel" = "$name" ] || [ "$label" = "$name" ]; then
+      RESOLVED_PATH="$wtpath"
+      RESOLVED_BASE=""
+      RESOLVED_NAME="$name"
+      return 0
+    fi
+  done < <(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print $2}')
   return 1
 }
 
-# git worktree list에서 관리 대상 워크트리 상대 이름 나열
+# git worktree list에서 정리/조회 가능한 이름 나열 (메인 제외)
 list_managed_worktree_names() {
-  local wtpath rel
+  local wtpath
   while IFS= read -r wtpath; do
     [ -n "$wtpath" ] || continue
-    rel="$(worktree_relative_name "$wtpath" 2>/dev/null || true)"
-    [ -n "$rel" ] && printf '%s\n' "$rel"
+    [ "$wtpath" = "$REPO_ROOT" ] && continue
+    printf '%s\n' "$(worktree_label "$wtpath")"
   done < <(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print $2}')
 }
 
@@ -180,7 +206,7 @@ require_claude() {
 require_worktree() {
   local name="$1"
   resolve_worktree_by_name "$name" && return 0
-  err "워크트리 없음: ${name} ${C_DIM}(검색: ${WORKTREE_BASES[*]})${C_RESET}"
+  err "워크트리 없음: ${name} ${C_DIM}(관리 베이스 + git worktree list)${C_RESET}"
   return 1
 }
 
@@ -715,7 +741,7 @@ _resolve_or_list() {
     return 0
   fi
 
-  err "워크트리 없음: ${name} ${C_DIM}(검색: ${WORKTREE_BASES[*]})${C_RESET}"
+  err "워크트리 없음: ${name} ${C_DIM}(관리 베이스 + git worktree list)${C_RESET}"
   local -a entries=()
   while IFS= read -r rel; do
     [ -n "$rel" ] && entries+=("$rel")
@@ -855,13 +881,7 @@ cmd_remove() {
 cmd_clean() {
   require_repo
 
-  local any_base=0 base wbase
-  for base in "${WORKTREE_BASES[@]}"; do
-    if [ -d "${REPO_ROOT}/${base}" ]; then any_base=1; break; fi
-  done
-  if [ "$any_base" -eq 0 ]; then warn "워크트리 없음"; exit 0; fi
-
-  local default_br
+  local default_br base wbase
   default_br="${1:-$(merge_base_branch)}"
   if [ -z "$default_br" ]; then err "기준 브랜치 감지 실패 (명시: cw clean <base>)"; exit 1; fi
 
@@ -871,20 +891,20 @@ cmd_clean() {
   local is_tty=0
   [ -t 1 ] && is_tty=1
 
-  # 등록된 워크트리 (관리 베이스 하위) — collect_worktree_rows 재사용
+  # 등록된 linked worktree 전부 (메인·bare 제외) — orca/workspaces 등 외부 경로 포함
   # (워크트리별 git -C 호출이 부모 워크트리로 walk up 하는 사고 방지)
   collect_worktree_rows
   local -a registered=() reg_branches=() reg_prunable=()
   local i n_all=${#_WT_PATHS[@]}
   for (( i=0; i<n_all; i++ )); do
-    if is_managed_worktree_path "${_WT_PATHS[$i]}"; then
-      registered+=("${_WT_PATHS[$i]}")
-      reg_branches+=("${_WT_BRANCHES[$i]}")
-      reg_prunable+=("${_WT_PRUNABLE[$i]}")
-    fi
+    [ "${_WT_BARE[$i]:-0}" = "1" ] && continue
+    [ "${_WT_PATHS[$i]}" = "$REPO_ROOT" ] && continue
+    registered+=("${_WT_PATHS[$i]}")
+    reg_branches+=("${_WT_BRANCHES[$i]}")
+    reg_prunable+=("${_WT_PRUNABLE[$i]}")
   done
 
-  # stray = 관리 베이스 직속 디렉토리 중 등록된 워크트리의 부모도 자기 자신도 아닌 것
+  # stray = 관리 베이스 직속 디렉토리만 (외부 orca 경로는 git 등록분만 처리)
   local -a strays=()
   for base in "${WORKTREE_BASES[@]}"; do
     wbase="${REPO_ROOT}/${base}"
@@ -918,11 +938,11 @@ cmd_clean() {
   local -a kept_unmerged=()
   local idx=0
 
-  # 1) stray 디렉토리 (git 등록 없음) — 단순 rm
+  # 1) stray 디렉토리 (관리 베이스, git 등록 없음) — 단순 rm
   for wtpath in "${strays[@]+"${strays[@]}"}"; do
     idx=$((idx + 1))
     local name prefix
-    name="$(worktree_relative_name "$wtpath" 2>/dev/null || basename "$wtpath")"
+    name="$(worktree_label "$wtpath")"
     prefix="${C_DIM}[${idx}/${total}]${C_RESET}"
     spinner_start "[${idx}/${total}] 정리 중: ${name} (stray)"
     rm -rf "$wtpath"
@@ -931,13 +951,13 @@ cmd_clean() {
     cleaned=$((cleaned + 1))
   done
 
-  # 2) 등록된 워크트리 처리
+  # 2) 등록된 워크트리 처리 (관리 베이스 + 외부 경로)
   local i_reg=-1
   for wtpath in "${registered[@]+"${registered[@]}"}"; do
     i_reg=$((i_reg + 1))
     idx=$((idx + 1))
     local name branch prunable prefix
-    name="$(worktree_relative_name "$wtpath" 2>/dev/null || basename "$wtpath")"
+    name="$(worktree_label "$wtpath")"
     branch="${reg_branches[$i_reg]}"
     prunable="${reg_prunable[$i_reg]}"
     prefix="${C_DIM}[${idx}/${total}]${C_RESET}"
@@ -1109,6 +1129,10 @@ cmd_move() {
 
   local name="$1" newname="$2"
   require_worktree "$name" || exit 1
+  if [ -z "$RESOLVED_BASE" ] || ! is_managed_worktree_path "$RESOLVED_PATH"; then
+    err "관리 베이스(${WORKTREE_BASES[*]}) 밖 워크트리는 move 불가"
+    exit 1
+  fi
   local newpath="${REPO_ROOT}/${RESOLVED_BASE}/${newname}"
 
   if [ -e "$newpath" ]; then err "대상 경로 이미 존재: ${newpath}"; exit 1; fi

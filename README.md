@@ -139,10 +139,12 @@ cw clean main                    # 기준 브랜치 명시 override
 ```
 
 `clean` 정책:
+- 대상: `git worktree list`의 **모든 linked worktree** (메인·bare 제외). `.claude/worktrees`, `.worktrees`, `orca/workspaces/...` 등 경로 무관
 - 머지된 브랜치 → 워크트리 + 브랜치 둘 다 삭제
 - 잠긴 워크트리 → 스킵
 - detached HEAD → HEAD 커밋이 기준 브랜치 ancestor면 삭제, 아니면 유지
 - 머지 안 됨 → 유지 (끝에 `cw remove <name> -f` 힌트 출력)
+- stray 디렉토리 삭제는 관리 베이스(`.claude/worktrees`, `.worktrees`) 안에서만
 
 ```bash
 cw prune                         # stale 참조 정리 + 머지된 orphan 브랜치 삭제

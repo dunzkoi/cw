@@ -614,6 +614,43 @@ t_prune() {
   assert_eq "$count" "0" "prune — prunable 메타데이터 정리"
 }
 
+# 관리 베이스(.claude/worktrees, .worktrees) 밖 linked worktree도 clean 대상
+t_clean_external_merged() {
+  local r="$1"
+  local ext wp
+  ext="$(mktemp -d -t cw-ext.XXXXXX)"
+  ext="$(cd "$ext" && pwd -P)"
+  wp="$ext/ext-merged"
+  git -C "$r" worktree add "$wp" -b feature/ext-merged main -q
+  echo c > "$wp/c.txt"
+  git -C "$wp" add c.txt
+  git -C "$wp" commit -q -m "ext"
+  git -C "$r" merge --ff-only feature/ext-merged -q
+  cw_run "$r" clean main >/dev/null 2>&1
+  assert_dir_missing "$wp" "clean — 외부 경로 머지 워크트리 삭제"
+  assert_branch_missing "$r" "feature/ext-merged" "clean — 외부 경로 머지 브랜치 삭제"
+  rm -rf "$ext"
+}
+
+t_clean_external_unmerged_kept() {
+  local r="$1"
+  local ext wp
+  ext="$(mktemp -d -t cw-ext.XXXXXX)"
+  ext="$(cd "$ext" && pwd -P)"
+  wp="$ext/ext-keep"
+  git -C "$r" worktree add "$wp" -b feature/ext-keep main -q
+  echo c > "$wp/c.txt"
+  git -C "$wp" add c.txt
+  git -C "$wp" commit -q -m "ext keep"
+  cw_run "$r" clean main >/dev/null 2>&1
+  assert_dir_exists "$wp" "clean — 외부 경로 미머지 워크트리 보존"
+  assert_branch_exists "$r" "feature/ext-keep" "clean — 외부 경로 미머지 브랜치 보존"
+  # resolve/remove도 basename으로 외부 경로를 찾는지
+  cw_run "$r" remove ext-keep -f >/dev/null 2>&1
+  assert_dir_missing "$wp" "remove — 외부 경로 basename resolve"
+  rm -rf "$ext"
+}
+
 # ─────────────────────────────────────────────────────────────
 # 실행
 # ─────────────────────────────────────────────────────────────
@@ -658,6 +695,8 @@ run_test "clean stray 디렉토리"         t_clean_stray_dir
 run_test "clean prunable"               t_clean_prunable
 run_test "clean 혼합 시나리오"          t_clean_mixed
 run_test "prune"                        t_prune
+run_test "clean 외부 경로 머지"         t_clean_external_merged
+run_test "clean/remove 외부 경로"       t_clean_external_unmerged_kept
 
 echo ""
 echo "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
