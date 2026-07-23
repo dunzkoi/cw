@@ -4,7 +4,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-CW_VERSION="0.1.18"
+CW_VERSION="0.1.19"
 DEFAULT_WORKTREE_BASE=".claude/worktrees"
 # resolve/clean 대상 — 앞쪽이 우선 (.claude/worktrees → .worktrees)
 WORKTREE_BASES=(".claude/worktrees" ".worktrees")
@@ -1026,13 +1026,14 @@ cmd_clean() {
       continue
     fi
 
-    # patch-id 기반 머지 판정 (ancestor + rebase/cherry-pick 커버, squash 다→1은 한계).
-    # 삭제 전 가드:
-    #   (1) dirty 없음
-    #   (2) tip ≠ 기준 tip → patch-merged/옛 tip 흡수 → 삭제 (reflog 무시: 빈 reflog false-negative 방지)
-    #   (3) tip == 기준 tip → 미작업 vs 방금 ff-merge. reflog>1 이면 삭제, ≤1·빈 reflog면 유지
+    # patch-id 기반 머지 판정 (rebase/cherry-pick 커버, squash 다→1은 한계).
+    # cherry0 이어도 유형이 갈림:
+    #   A) tip이 기준의 ancestor (옛 main에 주차) + reflog≤1 → orca/미작업 유지
+    #   B) tip이 기준의 ancestor + reflog>1 → ff-merge 후 main만 전진 → 삭제
+    #   C) tip==기준 tip + reflog≤1 → 방금 생성 미작업 → 유지
+    #   D) tip==기준 tip + reflog>1 → 방금 ff-merge → 삭제
+    #   E) tip이 ancestor 아님 + cherry0 → patch-equivalent 머지(15764) → 삭제 (빈 reflog여도)
     if is_effectively_merged "$branch" "$default_br"; then
-      # 보호 1: dirty 워크트리 (작업 중)는 절대 자동 삭제 금지
       local dirty
       dirty="$(worktree_dirty "$wtpath")"
       if [ -n "$dirty" ]; then
@@ -1042,17 +1043,19 @@ cmd_clean() {
         skipped=$((skipped + 1))
         continue
       fi
-      local br_sha base_sha
+      local br_sha base_sha refcount
       br_sha="$(git rev-parse "$branch" 2>/dev/null || true)"
       base_sha="$(git rev-parse "$default_br" 2>/dev/null || true)"
-      if [ -n "$br_sha" ] && [ -n "$base_sha" ] && [ "$br_sha" = "$base_sha" ]; then
-        local refcount
-        refcount="$(git reflog show "$branch" 2>/dev/null | wc -l | tr -d ' ')"
-        if [ "${refcount:-0}" -le 1 ]; then
-          [ "$is_tty" -eq 1 ] && printf '\r\033[K'
-          skip "${prefix} 유지: ${name} (${branch}) — 기준 브랜치 tip과 동일 (미작업)"
-          skipped=$((skipped + 1))
-          continue
+      refcount="$(git reflog show "$branch" 2>/dev/null | wc -l | tr -d ' ')"
+      if [ -n "$br_sha" ] && [ -n "$base_sha" ]; then
+        if [ "$br_sha" = "$base_sha" ] || git merge-base --is-ancestor "$br_sha" "$default_br" 2>/dev/null; then
+          # tip이 기준 히스토리 안(동일 tip 또는 옛 tip). 활동 reflog 없으면 유지.
+          if [ "${refcount:-0}" -le 1 ]; then
+            [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+            skip "${prefix} 유지: ${name} (${branch}) — 기준 브랜치에 포함된 tip (미작업/주차)"
+            skipped=$((skipped + 1))
+            continue
+          fi
         fi
       fi
       spinner_start "[${idx}/${total}] 정리 중: ${name} (${branch}, 워크트리 삭제)"

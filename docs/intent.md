@@ -23,6 +23,8 @@
 - Homebrew/install.sh로 단일 `cw` 스크립트 배포 가능
 
 ## Load-bearing notes
-- `git cherry`(patch-id)로 rebase/cherry-pick 머지를 잡음. 미작업 보호는 tip==기준브랜치 tip(SHA)일 때만 — 빈 reflog는 “미작업”이 아님(patch-merged false-negative 방지)
+- `git cherry`(patch-id)로 rebase/cherry-pick 머지를 잡음
+- tip이 기준의 ancestor이고 reflog≤1이면 유지 (orca 주차/미작업). tip이 ancestor가 아닌데 cherry0이면 빈 reflog여도 삭제(patch-merged)
+- tip==기준 tip + reflog>1 이면 ff-merge로 보고 삭제
 - porcelain 파싱은 `collect_worktree_rows` 한 경로를 list/clean이 공유 (워크트리별 `git -C` walk-up 사고 방지)
 - `cw clean`은 `git worktree list`의 메인·bare 제외 전부 대상 — orca/workspaces 등 외부 경로 포함
