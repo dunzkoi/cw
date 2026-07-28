@@ -4,7 +4,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-CW_VERSION="0.1.19"
+CW_VERSION="0.1.20"
 DEFAULT_WORKTREE_BASE=".claude/worktrees"
 # resolve/clean 대상 — 앞쪽이 우선 (.claude/worktrees → .worktrees)
 WORKTREE_BASES=(".claude/worktrees" ".worktrees")
@@ -69,7 +69,7 @@ ${C_BOLD}Commands:${C_RESET}
   ${C_CYAN}cursor${C_RESET} <name>                  Cursor에서 워크트리 열기
   ${C_CYAN}name${C_RESET} <name>                    워크트리 이름 출력 + 클립보드 복사
   ${C_CYAN}remove${C_RESET} <name> [-f|--force]     특정 워크트리 삭제 (브랜치 포함)
-  ${C_CYAN}clean${C_RESET} [base]                    머지된 워크트리 일괄 정리 (git worktree 전체, 메인 제외)
+  ${C_CYAN}clean${C_RESET} [base] [-y|--yes]         머지된 워크트리 일괄 정리 (삭제 전 확인, -y로 생략)
   ${C_CYAN}lock${C_RESET} <name> [reason]           워크트리 잠금 (삭제 방지)
   ${C_CYAN}unlock${C_RESET} <name>                   워크트리 잠금 해제
   ${C_CYAN}move${C_RESET} <name> <new-name>          워크트리 이름 변경
@@ -881,8 +881,25 @@ cmd_remove() {
 cmd_clean() {
   require_repo
 
+  local -a args=()
+  if [ $# -gt 0 ]; then
+    while IFS= read -r a; do args+=("$a"); done < <(expand_short_opts "$@")
+  fi
+  set -- "${args[@]+"${args[@]}"}"
+
+  local opt_yes=0
+  local -a positional=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -y|--yes) opt_yes=1; shift ;;
+      --)       shift; break ;;
+      -*)       err "알 수 없는 옵션: $1"; exit 1 ;;
+      *)        positional+=("$1"); shift ;;
+    esac
+  done
+
   local default_br base wbase
-  default_br="${1:-$(merge_base_branch)}"
+  default_br="${positional[0]:-$(merge_base_branch)}"
   if [ -z "$default_br" ]; then err "기준 브랜치 감지 실패 (명시: cw clean <base>)"; exit 1; fi
 
   info "기준 브랜치: ${C_CYAN}${default_br}${C_RESET}"
@@ -936,19 +953,17 @@ cmd_clean() {
 
   local cleaned=0 skipped=0
   local -a kept_unmerged=()
+  # 삭제 후보 큐 — 검사만 먼저 하고, 사용자 확인 후 실제 삭제 (type|path|branch|label|reason)
+  #   type: rm(디렉토리만) / wt(git worktree remove; branch 있으면 -D)
+  local -a plan=()
   local idx=0
 
   # 1) stray 디렉토리 (관리 베이스, git 등록 없음) — 단순 rm
   for wtpath in "${strays[@]+"${strays[@]}"}"; do
     idx=$((idx + 1))
-    local name prefix
+    local name
     name="$(worktree_label "$wtpath")"
-    prefix="${C_DIM}[${idx}/${total}]${C_RESET}"
-    spinner_start "[${idx}/${total}] 정리 중: ${name} (stray)"
-    rm -rf "$wtpath"
-    spinner_stop
-    ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} ${C_DIM}(stray 디렉토리 — git 등록 없음)${C_RESET}"
-    cleaned=$((cleaned + 1))
+    plan+=("rm|${wtpath}||${name}|stray 디렉토리 (git 등록 없음)")
   done
 
   # 2) 등록된 워크트리 처리 (관리 베이스 + 외부 경로)
@@ -970,11 +985,8 @@ cmd_clean() {
     # prunable: git 내부 메타데이터는 살아있지만 워크트리 .git 파일이 사라진 상태
     # → 디렉토리 정리하고 git worktree prune이 메타데이터 정리하게 둠
     if [ "$prunable" = "1" ]; then
-      spinner_start "[${idx}/${total}] 정리 중: ${name} (prunable)"
-      [ -d "$wtpath" ] && rm -rf "$wtpath"
-      spinner_stop
-      ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} ${C_DIM}(prunable — git 등록 메타데이터만 잔존)${C_RESET}"
-      cleaned=$((cleaned + 1))
+      [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+      plan+=("rm|${wtpath}||${name}|prunable (git 등록 메타데이터만 잔존)")
       continue
     fi
 
@@ -1006,19 +1018,7 @@ cmd_clean() {
           skipped=$((skipped + 1))
           continue
         fi
-        spinner_start "[${idx}/${total}] 정리 중: ${name} (detached, 워크트리 삭제)"
-        local _rc=0
-        git worktree remove "$wtpath" --force 2>/dev/null || _rc=$?
-        if [ "$_rc" -eq 0 ]; then
-          [ -d "$wtpath" ] && rm -rf "$wtpath"
-          spinner_stop
-          ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} (${C_DIM}detached ${head_sha:0:10}${C_RESET}) — ${default_br}에 포함됨"
-          cleaned=$((cleaned + 1))
-        else
-          spinner_stop
-          err "${prefix} 유지: ${name} (detached) — 제거 실패"
-          skipped=$((skipped + 1))
-        fi
+        plan+=("wt|${wtpath}||${name}|detached ${head_sha:0:10}, ${default_br}에 포함됨")
       else
         skip "${prefix} 유지: ${name} — detached HEAD (${head_sha:0:10}) 미포함"
         skipped=$((skipped + 1))
@@ -1058,20 +1058,8 @@ cmd_clean() {
           fi
         fi
       fi
-      spinner_start "[${idx}/${total}] 정리 중: ${name} (${branch}, 워크트리 삭제)"
-      local _rc=0
-      git worktree remove "$wtpath" --force 2>/dev/null || _rc=$?
-      if [ "$_rc" -eq 0 ]; then
-        [ -d "$wtpath" ] && rm -rf "$wtpath"
-        git branch -D "$branch" 2>/dev/null || true
-        spinner_stop
-        ok "${prefix} 정리: ${C_BOLD}${name}${C_RESET} (${C_DIM}${branch}${C_RESET}) — ${default_br}에 머지됨"
-        cleaned=$((cleaned + 1))
-      else
-        spinner_stop
-        err "${prefix} 유지: ${name} (${branch}) — 제거 실패"
-        skipped=$((skipped + 1))
-      fi
+      [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+      plan+=("wt|${wtpath}|${branch}|${name}|${default_br}에 머지됨")
     else
       [ "$is_tty" -eq 1 ] && printf '\r\033[K'
       skipped=$((skipped + 1))
@@ -1082,6 +1070,59 @@ cmd_clean() {
 
   # 진행 라인 잔여 정리
   [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+
+  # 3) 삭제 후보 확인 → 승인 시에만 실제 삭제
+  local item p_type p_path p_branch p_label p_reason
+  if [ ${#plan[@]} -gt 0 ]; then
+    echo ""
+    echo "${C_BOLD}삭제 대상 ${#plan[@]}개:${C_RESET}"
+    for item in "${plan[@]}"; do
+      IFS='|' read -r p_type p_path p_branch p_label p_reason <<< "$item"
+      echo "   ${C_RED}✗${C_RESET} ${C_BOLD}${p_label}${C_RESET}${p_branch:+ (${C_DIM}${p_branch}${C_RESET})} ${C_DIM}— ${p_reason}${C_RESET}"
+    done
+    echo ""
+
+    local ans="n"
+    if [ "$opt_yes" -eq 1 ]; then
+      ans="y"
+    else
+      printf '%s' "${C_BOLD}삭제할까요?${C_RESET} ${C_DIM}[y/N]${C_RESET} "
+      # stdin 없음(cron 등) → EOF → "n" 으로 안전 폴백
+      IFS= read -r ans || ans="n"
+      echo ""
+    fi
+
+    case "$ans" in
+      y|Y|yes|YES)
+        local n_plan=${#plan[@]} i_plan=0 _rc
+        for item in "${plan[@]}"; do
+          IFS='|' read -r p_type p_path p_branch p_label p_reason <<< "$item"
+          i_plan=$((i_plan + 1))
+          spinner_start "[${i_plan}/${n_plan}] 정리 중: ${p_label}"
+          _rc=0
+          if [ "$p_type" = "wt" ]; then
+            git worktree remove "$p_path" --force 2>/dev/null || _rc=$?
+          fi
+          if [ "$_rc" -eq 0 ]; then
+            [ -d "$p_path" ] && rm -rf "$p_path"
+            [ -n "$p_branch" ] && { git branch -D "$p_branch" >/dev/null 2>&1 || true; }
+            spinner_stop
+            ok "${C_DIM}[${i_plan}/${n_plan}]${C_RESET} 정리: ${C_BOLD}${p_label}${C_RESET}${p_branch:+ (${C_DIM}${p_branch}${C_RESET})} ${C_DIM}— ${p_reason}${C_RESET}"
+            cleaned=$((cleaned + 1))
+          else
+            spinner_stop
+            err "${C_DIM}[${i_plan}/${n_plan}]${C_RESET} 유지: ${p_label} — 제거 실패"
+            skipped=$((skipped + 1))
+          fi
+        done
+        ;;
+      *)
+        skip "삭제 취소 — ${#plan[@]}개 유지"
+        hint "확인 없이 삭제: ${C_CYAN}cw clean -y${C_RESET}"
+        skipped=$((skipped + ${#plan[@]}))
+        ;;
+    esac
+  fi
 
   # 중첩 워크트리(fix/ceoapp) 제거 후 비게 된 부모 디렉토리(fix/) 정리
   for base in "${WORKTREE_BASES[@]}"; do

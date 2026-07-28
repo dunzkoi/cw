@@ -264,7 +264,7 @@ t_clean_worktrees_merged() {
   git -C "$wp" add m.txt
   git -C "$wp" commit -q -m "m"
   git -C "$r" merge --ff-only worktrees-wt-clean -q
-  cw_run "$r" clean main >/dev/null 2>&1
+  cw_run "$r" clean main -y >/dev/null 2>&1
   assert_dir_missing "$wp" "clean — .worktrees 머지 워크트리 삭제"
   assert_branch_missing "$r" "worktrees-wt-clean" "clean — .worktrees 머지 브랜치 삭제"
 }
@@ -274,7 +274,7 @@ t_clean_worktrees_stray() {
   mkdir -p "$r/.worktrees"
   mkdir -p "$r/.worktrees/orphan-wt"
   echo x > "$r/.worktrees/orphan-wt/x"
-  cw_run "$r" clean main >/dev/null 2>&1
+  cw_run "$r" clean main -y >/dev/null 2>&1
   assert_dir_missing "$r/.worktrees/orphan-wt" "clean — .worktrees stray 삭제"
 }
 
@@ -289,7 +289,7 @@ t_clean_mixed_bases() {
   local wp2="$r/.worktrees/dot-wt"
   echo b > "$wp2/b.txt" && git -C "$wp2" add b.txt && git -C "$wp2" commit -q -m b
   git -C "$r" merge --ff-only worktrees-dot-wt -q
-  cw_run "$r" clean main >/dev/null 2>&1
+  cw_run "$r" clean main -y >/dev/null 2>&1
   assert_dir_missing "$wp1" "mixed bases — .claude/worktrees 삭제"
   assert_dir_missing "$wp2" "mixed bases — .worktrees 삭제"
 }
@@ -395,9 +395,32 @@ t_clean_merged_removed() {
   git -C "$wp" add c.txt
   git -C "$wp" commit -q -m "c"
   git -C "$r" merge --ff-only worktrees-cm1 -q
-  cw_run "$r" clean >/dev/null 2>&1
+  cw_run "$r" clean -y >/dev/null 2>&1
   assert_dir_missing "$r/.claude/worktrees/cm1" "clean — 머지된 워크트리 삭제"
   assert_branch_missing "$r" "worktrees-cm1" "clean — 머지된 브랜치 삭제"
+}
+
+# 삭제 전 확인: -y 없으면 목록만 보여주고 응답에 따라 실행/취소
+t_clean_confirm_prompt() {
+  local r="$1" out wp="$1/.claude/worktrees/cfn"
+  cw_run "$r" add cfn -n >/dev/null 2>&1
+  echo x > "$wp/x.txt"
+  git -C "$wp" add x.txt
+  git -C "$wp" commit -q -m "x"
+  git -C "$r" merge --ff-only worktrees-cfn -q
+
+  out="$(printf 'n\n' | cw_run "$r" clean 2>&1)"
+  assert_contains "$out" "삭제 대상" "clean 확인 — 삭제 대상 목록 출력"
+  assert_dir_exists "$r/.claude/worktrees/cfn" "clean 확인 — n 응답 시 워크트리 보존"
+  assert_branch_exists "$r" "worktrees-cfn" "clean 확인 — n 응답 시 브랜치 보존"
+
+  # 빈 stdin(cron 등) → EOF → 안전 폴백으로 보존
+  cw_run "$r" clean </dev/null >/dev/null 2>&1
+  assert_dir_exists "$r/.claude/worktrees/cfn" "clean 확인 — stdin EOF 시 보존"
+
+  printf 'y\n' | cw_run "$r" clean >/dev/null 2>&1
+  assert_dir_missing "$r/.claude/worktrees/cfn" "clean 확인 — y 응답 시 삭제"
+  assert_branch_missing "$r" "worktrees-cfn" "clean 확인 — y 응답 시 브랜치 삭제"
 }
 
 # 회귀 테스트: cw add 후 작업 시작 안 한 워크트리 (HEAD == base) 자동 삭제 방지
@@ -405,7 +428,7 @@ t_clean_skips_untouched_branch() {
   local r="$1"
   cw_run "$r" add untouched -n >/dev/null 2>&1
   # 추가만 하고 commit 없음 → 브랜치 HEAD == main HEAD
-  cw_run "$r" clean >/dev/null 2>&1
+  cw_run "$r" clean -y >/dev/null 2>&1
   assert_dir_exists "$r/.claude/worktrees/untouched" "[회귀] clean — 미작업 워크트리 보존 (HEAD==base)"
   assert_branch_exists "$r" "worktrees-untouched" "[회귀] clean — 미작업 브랜치 보존"
 }
@@ -434,7 +457,7 @@ t_clean_dirty_old_base_kept() {
   echo "WIP" > "$r/.claude/worktrees/stale/wip.txt"
   echo "MORE" >> "$r/README"
   # cw clean 실행 — 삭제되면 데이터 손실
-  cw_run "$r" clean >/dev/null 2>&1
+  cw_run "$r" clean -y >/dev/null 2>&1
   assert_dir_exists "$r/.claude/worktrees/stale" \
     "[회귀] clean — 옛 base + dirty 워크트리 보존 (사용자 케이스)"
   if [ -f "$r/.claude/worktrees/stale/wip.txt" ]; then
@@ -454,7 +477,7 @@ t_clean_old_base_no_work_kept() {
   git -C "$r/.claude/worktrees/advancer2" add a.txt
   git -C "$r/.claude/worktrees/advancer2" commit -q -m "advance"
   git -C "$r" merge --ff-only worktrees-advancer2 -q
-  cw_run "$r" clean >/dev/null 2>&1
+  cw_run "$r" clean -y >/dev/null 2>&1
   assert_dir_exists "$r/.claude/worktrees/stale2" \
     "[회귀] clean — 옛 base 주차 미작업 보존"
   assert_branch_exists "$r" "feature/stale2" "[회귀] clean — 옛 base 주차 브랜치 보존"
@@ -474,7 +497,7 @@ t_clean_patch_merged_empty_reflog() {
   git -C "$r" cherry-pick --quiet worktrees-pm1 >/dev/null 2>&1
   # reflog 비우기 — 실환경(복사/만료)에서 0줄인 경우 재현
   : > "$(git -C "$r" rev-parse --git-common-dir)/logs/refs/heads/worktrees-pm1"
-  cw_run "$r" clean >/dev/null 2>&1
+  cw_run "$r" clean -y >/dev/null 2>&1
   assert_dir_missing "$wp" "[회귀] clean — patch-merged + 빈 reflog 삭제"
   assert_branch_missing "$r" "worktrees-pm1" "[회귀] clean — patch-merged 브랜치 삭제"
 }
@@ -506,7 +529,7 @@ t_clean_rebase_merged_removed() {
     return
   fi
   # 워크트리는 깨끗 (uncommitted 변경 없음 — dirty 가드 통과)
-  cw_run "$r" clean >/dev/null 2>&1
+  cw_run "$r" clean -y >/dev/null 2>&1
   assert_dir_missing "$wp" \
     "[회귀] clean — rebase 후 patch-equivalent 머지 삭제 (SHA 달라도 patch-id 일치)"
   assert_branch_missing "$r" "worktrees-rb1" \
@@ -518,7 +541,7 @@ t_clean_detached_dirty_kept() {
   local r="$1"
   cw_run "$r" add det1 -d -n >/dev/null 2>&1
   echo dirty > "$r/.claude/worktrees/det1/wip.txt"
-  cw_run "$r" clean >/dev/null 2>&1
+  cw_run "$r" clean -y >/dev/null 2>&1
   assert_dir_exists "$r/.claude/worktrees/det1" \
     "[회귀] clean — detached + dirty 보존"
 }
@@ -530,7 +553,7 @@ t_clean_unmerged_kept() {
   echo c > "$wp/c.txt"
   git -C "$wp" add c.txt
   git -C "$wp" commit -q -m "c"
-  cw_run "$r" clean >/dev/null 2>&1
+  cw_run "$r" clean -y >/dev/null 2>&1
   assert_dir_exists "$wp" "clean — 머지 안 된 워크트리 유지"
   assert_branch_exists "$r" "worktrees-cm2" "clean — 머지 안 된 브랜치 유지"
 }
@@ -545,7 +568,7 @@ t_clean_nested_unmerged_preserved() {
   git -C "$wp" commit -q -m "c"
   # 중요한 마커 파일 — clean이 부모를 통째로 rm 하면 사라짐
   echo "important" > "$wp/IMPORTANT.txt"
-  cw_run "$r" clean >/dev/null 2>&1
+  cw_run "$r" clean -y >/dev/null 2>&1
   assert_dir_exists "$wp" "[회귀] clean — 중첩 워크트리 보존"
   if [ -f "$wp/IMPORTANT.txt" ]; then pass "[회귀] clean — 중첩 워크트리 파일 보존"
   else fail "[회귀] clean — 중첩 워크트리 파일 삭제됨 (데이터 손실 버그)"; fi
@@ -560,7 +583,7 @@ t_clean_nested_merged_removed() {
   git -C "$wp" add c.txt
   git -C "$wp" commit -q -m "c"
   git -C "$r" merge --ff-only "worktrees-fix/ceoapp" -q
-  cw_run "$r" clean >/dev/null 2>&1
+  cw_run "$r" clean -y >/dev/null 2>&1
   assert_dir_missing "$r/.claude/worktrees/fix/ceoapp" "clean — 중첩 머지 워크트리 삭제"
   assert_dir_missing "$r/.claude/worktrees/fix" "clean — 빈 부모 디렉토리 정리"
   assert_branch_missing "$r" "worktrees-fix/ceoapp" "clean — 중첩 머지 브랜치 삭제"
@@ -570,7 +593,7 @@ t_clean_stray_dir() {
   local r="$1"
   mkdir -p "$r/.claude/worktrees/orphan"
   echo x > "$r/.claude/worktrees/orphan/x"
-  cw_run "$r" clean >/dev/null 2>&1
+  cw_run "$r" clean -y >/dev/null 2>&1
   assert_dir_missing "$r/.claude/worktrees/orphan" "clean — stray 디렉토리 삭제"
 }
 
@@ -581,7 +604,7 @@ t_clean_prunable() {
   rm -f "$r/.claude/worktrees/pr1/.git"
   local before
   before="$(git -C "$r" worktree list --porcelain | grep -c "^worktree ")"
-  cw_run "$r" clean >/dev/null 2>&1
+  cw_run "$r" clean -y >/dev/null 2>&1
   local after
   after="$(git -C "$r" worktree list --porcelain | grep -c "^worktree ")"
   assert_dir_missing "$r/.claude/worktrees/pr1" "clean prunable — 디렉토리 삭제"
@@ -613,7 +636,7 @@ t_clean_mixed() {
   mkdir -p "$r/.claude/worktrees/stray"
   echo x > "$r/.claude/worktrees/stray/x"
 
-  cw_run "$r" clean >/dev/null 2>&1
+  cw_run "$r" clean -y >/dev/null 2>&1
 
   assert_dir_missing "$r/.claude/worktrees/merged" "mixed — 머지 워크트리 삭제"
   assert_dir_exists "$r/.claude/worktrees/unmerged" "mixed — 머지 안 된 보존"
@@ -644,7 +667,7 @@ t_clean_external_merged() {
   git -C "$wp" add c.txt
   git -C "$wp" commit -q -m "ext"
   git -C "$r" merge --ff-only feature/ext-merged -q
-  cw_run "$r" clean main >/dev/null 2>&1
+  cw_run "$r" clean main -y >/dev/null 2>&1
   assert_dir_missing "$wp" "clean — 외부 경로 머지 워크트리 삭제"
   assert_branch_missing "$r" "feature/ext-merged" "clean — 외부 경로 머지 브랜치 삭제"
   rm -rf "$ext"
@@ -660,7 +683,7 @@ t_clean_external_unmerged_kept() {
   echo c > "$wp/c.txt"
   git -C "$wp" add c.txt
   git -C "$wp" commit -q -m "ext keep"
-  cw_run "$r" clean main >/dev/null 2>&1
+  cw_run "$r" clean main -y >/dev/null 2>&1
   assert_dir_exists "$wp" "clean — 외부 경로 미머지 워크트리 보존"
   assert_branch_exists "$r" "feature/ext-keep" "clean — 외부 경로 미머지 브랜치 보존"
   # resolve/remove도 basename으로 외부 경로를 찾는지
@@ -698,6 +721,7 @@ run_test "remove dirty 거부"            t_remove_dirty_refused
 run_test "remove -f dirty"              t_remove_dirty_force
 run_test "remove unmerged 거부"         t_remove_unmerged_refused
 run_test "clean 머지된 워크트리"        t_clean_merged_removed
+run_test "clean 삭제 전 확인"           t_clean_confirm_prompt
 run_test "clean .worktrees 머지"          t_clean_worktrees_merged
 run_test "clean .worktrees stray"       t_clean_worktrees_stray
 run_test "clean 양쪽 베이스 혼합"       t_clean_mixed_bases
