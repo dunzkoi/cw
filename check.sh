@@ -22,10 +22,10 @@ fi
 
 # 색상 (TTY일 때만)
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-  RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'
-  CYAN=$'\033[36m'; GRAY=$'\033[90m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
+  RED=$'\033[31m'; GREEN=$'\033[32m'
+  GRAY=$'\033[90m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
 else
-  RED=""; GREEN=""; YELLOW=""; CYAN=""; GRAY=""; BOLD=""; RESET=""
+  RED=""; GREEN=""; GRAY=""; BOLD=""; RESET=""
 fi
 
 PASS=0
@@ -132,9 +132,10 @@ run_test() {
   local repo orig_cwd
   repo="$(setup_repo)"
   orig_cwd="$(pwd)"
-  cd "$repo"
+  # 진입 실패 시 테스트 중단: 엉뚱한 cwd(이 레포 등)에서 cw clean이 돌면 안 됨
+  cd "$repo" || { fail "임시 레포 진입 실패: $repo"; return; }
   "$fn" "$repo"
-  cd "$orig_cwd"
+  cd "$orig_cwd" || exit 1
   rm -rf "$repo"
 }
 
@@ -246,7 +247,8 @@ t_name_worktrees_base() {
 
 # .worktrees 베이스에 git worktree add (cw add는 .claude/worktrees만 생성)
 _add_worktree_at_base() {
-  local r="$1" base="$2" name="$3" branch="${4:-worktrees-${name}}"
+  local r="$1" base="$2" name="$3"
+  local branch="${4:-worktrees-${name}}"
   mkdir -p "$r/${base}"
   git -C "$r" worktree add "$r/${base}/${name}" -b "$branch" main -q
 }
@@ -318,9 +320,9 @@ t_path() {
 t_open_cmd_env() {
   local r="$1" out rc=0
   cw_run "$r" add oc -n >/dev/null 2>&1
-  out="$(CW_OPEN_CMD=pwd cw_run "$r" open oc 2>/dev/null)"
+  out="$(CW_OPEN_CMD="pwd" cw_run "$r" open oc 2>/dev/null)"
   assert_eq "$out" "$r/.claude/worktrees/oc" "CW_OPEN_CMD — open이 워크트리에서 실행"
-  out="$(CW_OPEN_CMD=pwd cw_run "$r" add oc2 2>/dev/null | tail -1)"
+  out="$(CW_OPEN_CMD="pwd" cw_run "$r" add oc2 2>/dev/null | tail -1)"
   assert_eq "$out" "$r/.claude/worktrees/oc2" "CW_OPEN_CMD — add 후 워크트리에서 실행"
   out="$(CW_OPEN_CMD='printf "%s|" a "b c"' cw_run "$r" open oc 2>/dev/null)"
   assert_eq "$out" "a|b c|" "CW_OPEN_CMD — 따옴표 인자 유지"

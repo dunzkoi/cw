@@ -1,0 +1,36 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest: /bin/bash 3.2 (README 최소 지원), ubuntu-latest: bash 5 + GNU coreutils
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: git 사용자 설정
+        run: |
+          git config --global user.name "cw-ci"
+          git config --global user.email "ci@cw.invalid"
+          git config --global init.defaultBranch main
+
+      - name: shellcheck 설치 (macOS)
+        if: runner.os == 'macOS'
+        run: command -v shellcheck || brew install shellcheck
+
+      - name: shellcheck
+        run: shellcheck -S warning cw install.sh check.sh
+
+      - name: check.sh
+        run: ./check.sh

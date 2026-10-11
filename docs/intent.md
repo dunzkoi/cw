@@ -13,6 +13,7 @@
 - 중첩 경로(`fix/ceoapp`)의 부모 디렉토리를 stray로 오판해 `rm -rf` 하지 않기
 - stray `rm`은 관리 베이스(`.claude/worktrees`, `.worktrees`) 안에서만 — orca 등 외부는 git 등록분만
 - 테스트(`check.sh`) 회귀가 통과한 뒤에만 릴리즈/커밋 훅 통과
+- PR·main push는 `.github/workflows/check.yml`(macOS bash 3.2 · Ubuntu)에서 `shellcheck -S warning` + `check.sh` 통과
 
 ## Out of scope
 - Windows

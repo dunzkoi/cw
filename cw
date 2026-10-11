@@ -161,19 +161,17 @@ worktree_label() {
   fi
 }
 
-# RESOLVED_PATH / RESOLVED_BASE / RESOLVED_NAME 설정. 없으면 1.
+# RESOLVED_PATH / RESOLVED_BASE 설정. 없으면 1.
 # 1) 관리 베이스 경로 우선  2) git worktree list 전역 basename/상대이름 매칭
 resolve_worktree_by_name() {
   local name="$1" base wpath wtpath rel label
   RESOLVED_PATH=""
   RESOLVED_BASE=""
-  RESOLVED_NAME=""
   for base in "${WORKTREE_BASES[@]}"; do
     wpath="${REPO_ROOT}/${base}/${name}"
     if [ -d "$wpath" ]; then
       RESOLVED_PATH="$wpath"
       RESOLVED_BASE="$base"
-      RESOLVED_NAME="$name"
       return 0
     fi
   done
@@ -187,7 +185,6 @@ resolve_worktree_by_name() {
     if [ "$rel" = "$name" ] || [ "$label" = "$name" ]; then
       RESOLVED_PATH="$wtpath"
       RESOLVED_BASE=""
-      RESOLVED_NAME="$name"
       return 0
     fi
   done < <(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print substr($0, 10)}')
