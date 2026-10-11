@@ -100,14 +100,20 @@ setup_repo() {
   d="$(mktemp -d -t cw-check.XXXXXX)"
   # macOS의 /var → /private/var 심링크 정규화 (git이 canonical 경로 반환)
   d="$(cd "$d" && pwd -P)"
-  git -C "$d" init -q -b main
+  init_repo "$d"
+  echo "$d"
+}
+
+# 지정 경로에 커밋 1개짜리 main 레포 초기화
+init_repo() {
+  local d="$1"
+  git init -q -b main "$d"
   git -C "$d" config user.email "test@cw"
   git -C "$d" config user.name "cw-test"
   git -C "$d" config commit.gpgsign false
   echo "init" > "$d/README"
   git -C "$d" add README
   git -C "$d" commit -q -m "init"
-  echo "$d"
 }
 
 # cw 실행 — HOME을 임시 디렉토리로 격리해서 init hook 차단
@@ -751,6 +757,25 @@ t_clean_external_unmerged_kept() {
   rm -rf "$ext"
 }
 
+# 공백 경로 레포 (iCloud Drive, Application Support 등): porcelain을 첫 단어에서 자르면 전부 실패
+t_space_in_repo_path() {
+  local sp="$1/My Proj" wp out
+  wp="$sp/.claude/worktrees/foo"
+  init_repo "$sp"
+  cd "$sp" || return
+  cw_run "$sp" add foo -n >/dev/null 2>&1
+  assert_dir_exists "$wp" "공백 경로 — add -n 생성"
+  out="$(NO_CLIPBOARD=1 cw_run "$sp" path foo 2>/dev/null)"
+  assert_eq "$out" "$wp" "공백 경로 — path 출력"
+  echo c > "$wp/c.txt"
+  git -C "$wp" add c.txt
+  git -C "$wp" commit -q -m "c"
+  git -C "$sp" merge --ff-only worktrees-foo -q
+  cw_run "$sp" clean -y >/dev/null 2>&1
+  assert_dir_missing "$wp" "공백 경로 — clean -y 머지 워크트리 삭제"
+  assert_branch_missing "$sp" "worktrees-foo" "공백 경로 — clean -y 브랜치 삭제"
+}
+
 # ─────────────────────────────────────────────────────────────
 # 실행
 # ─────────────────────────────────────────────────────────────
@@ -803,6 +828,7 @@ run_test "remove cherry-pick 흡수"      t_remove_cherry_picked
 run_test "[회귀] 기준 브랜치 오타"      t_bad_base_keeps_unmerged
 run_test "clean 외부 경로 머지"         t_clean_external_merged
 run_test "clean/remove 외부 경로"       t_clean_external_unmerged_kept
+run_test "공백 들어간 레포 경로"        t_space_in_repo_path
 
 echo ""
 echo "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"

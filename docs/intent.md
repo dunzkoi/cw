@@ -27,4 +27,5 @@
 - tip이 기준의 ancestor이고 reflog≤1이면 유지 (orca 주차/미작업). tip이 ancestor가 아닌데 cherry0이면 빈 reflog여도 삭제(patch-merged)
 - tip==기준 tip + reflog>1 이면 ff-merge로 보고 삭제
 - porcelain 파싱은 `collect_worktree_rows` 한 경로를 list/clean이 공유 (워크트리별 `git -C` walk-up 사고 방지)
+- porcelain `worktree` 경로는 줄 전체(`substr($0, 10)` / `${line#worktree }`)로 읽는다 — `$2`는 공백 경로를 자름
 - `cw clean`은 `git worktree list`의 메인·bare 제외 전부 대상 — orca/workspaces 등 외부 경로 포함

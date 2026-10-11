@@ -112,7 +112,7 @@ EOF
 require_repo() {
   # linked worktree 안에서도 항상 메인 워크트리(repo root)를 기준으로 동작
   git rev-parse --git-dir >/dev/null 2>&1 || { err "git repo 아님"; exit 1; }
-  REPO_ROOT="$(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print $2; exit}')"
+  REPO_ROOT="$(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print substr($0, 10); exit}')"
   if [ -z "$REPO_ROOT" ] || [ ! -d "$REPO_ROOT" ]; then
     err "메인 워크트리 경로 감지 실패"
     exit 1
@@ -185,7 +185,7 @@ resolve_worktree_by_name() {
       RESOLVED_NAME="$name"
       return 0
     fi
-  done < <(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print $2}')
+  done < <(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print substr($0, 10)}')
   return 1
 }
 
@@ -196,7 +196,7 @@ list_managed_worktree_names() {
     [ -n "$wtpath" ] || continue
     [ "$wtpath" = "$REPO_ROOT" ] && continue
     printf '%s\n' "$(worktree_label "$wtpath")"
-  done < <(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print $2}')
+  done < <(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print substr($0, 10)}')
 }
 
 require_claude() {
@@ -1197,7 +1197,7 @@ cmd_prune() {
   while IFS= read -r line; do
     prunable_branches+=("$line")
   done < <(git worktree list --porcelain 2>/dev/null | awk '
-    /^worktree / { path = $2; branch = "" }
+    /^worktree / { branch = "" }
     /^branch / { branch = $2; sub(/^refs\/heads\//, "", branch) }
     /^prunable/ { if (branch) print branch; branch = "" }
     /^$/ { branch = "" }
