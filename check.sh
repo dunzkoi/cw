@@ -314,6 +314,20 @@ t_path() {
   assert_eq "$out" "$r/.claude/worktrees/p1" "path — 정확한 경로 출력"
 }
 
+# CW_OPEN_CMD: add/open이 실행할 명령 교체 (pwd → 워크트리 경로 출력)
+t_open_cmd_env() {
+  local r="$1" out rc=0
+  cw_run "$r" add oc -n >/dev/null 2>&1
+  out="$(CW_OPEN_CMD=pwd cw_run "$r" open oc 2>/dev/null)"
+  assert_eq "$out" "$r/.claude/worktrees/oc" "CW_OPEN_CMD — open이 워크트리에서 실행"
+  out="$(CW_OPEN_CMD=pwd cw_run "$r" add oc2 2>/dev/null | tail -1)"
+  assert_eq "$out" "$r/.claude/worktrees/oc2" "CW_OPEN_CMD — add 후 워크트리에서 실행"
+  out="$(CW_OPEN_CMD='printf "%s|" a "b c"' cw_run "$r" open oc 2>/dev/null)"
+  assert_eq "$out" "a|b c|" "CW_OPEN_CMD — 따옴표 인자 유지"
+  CW_OPEN_CMD=no-such-agent cw_run "$r" open oc >/dev/null 2>&1 || rc=$?
+  assert_exit 1 "$rc" "CW_OPEN_CMD — 없는 명령이면 exit 1"
+}
+
 t_path_nonexistent() {
   local r="$1"
   local rc=0
@@ -834,6 +848,7 @@ run_test "path .worktrees 베이스"       t_path_worktrees_base
 run_test "name + 클립보드"              t_name_worktrees_base
 run_test "path"                         t_path
 run_test "path 없는 이름"               t_path_nonexistent
+run_test "CW_OPEN_CMD"                  t_open_cmd_env
 run_test "lock + unlock"                t_lock_unlock
 run_test "lock이 remove 차단"           t_lock_blocks_remove
 run_test "[회귀] 동명 잠금 .worktrees"  t_lock_same_name_dot_worktrees

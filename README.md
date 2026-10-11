@@ -185,6 +185,7 @@ WT="$1"
 |---|---|
 | `NO_COLOR=1` | 색상 출력 비활성화 |
 | `NO_CLIPBOARD=1` | `cw path` 클립보드 복사 비활성화 |
+| `CW_OPEN_CMD` | `add`/`open`이 워크트리에서 실행할 명령. 기본 `claude --dangerously-skip-permissions`. 예: `CW_OPEN_CMD=claude`(권한 확인 유지), `CW_OPEN_CMD=codex` |
 
 ## 안전장치
 
@@ -202,7 +203,7 @@ WT="$1"
 3. `core.hooksPath /dev/null` 설정
 4. `--lock` 시 즉시 잠금
 5. `~/.claude/worktree-init.sh` 실행
-6. `--no-open` 아니면 `cd` + `exec claude --dangerously-skip-permissions`
+6. `--no-open` 아니면 `cd` + `exec $CW_OPEN_CMD` (기본 `claude --dangerously-skip-permissions`)
 
 ### `cw clean`
 1. 메인 워크트리의 현재 브랜치를 기준으로 선정 (override: `cw clean <base>`)

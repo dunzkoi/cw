@@ -9,6 +9,8 @@ DEFAULT_WORKTREE_BASE=".claude/worktrees"
 # resolve/clean 대상 — 앞쪽이 우선 (.claude/worktrees → .worktrees)
 WORKTREE_BASES=(".claude/worktrees" ".worktrees")
 INIT_HOOK="${HOME}/.claude/worktree-init.sh"
+# add/open이 워크트리에서 실행할 명령 (예: CW_OPEN_CMD=codex)
+CW_OPEN_CMD="${CW_OPEN_CMD:-claude --dangerously-skip-permissions}"
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
@@ -104,6 +106,7 @@ ${C_BOLD}Examples:${C_RESET}
 
 ${C_BOLD}Env:${C_RESET}
   ${C_DIM}NO_COLOR=1${C_RESET}   색상 비활성화
+  ${C_DIM}CW_OPEN_CMD${C_RESET}  add/open이 실행할 명령 (기본: claude --dangerously-skip-permissions)
   ${C_DIM}${INIT_HOOK}${C_RESET}
             존재 시 cw add 완료 후 실행 (인자: 워크트리 경로)
 EOF
@@ -200,8 +203,15 @@ list_managed_worktree_names() {
   done < <(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print substr($0, 10)}')
 }
 
-require_claude() {
-  command -v claude >/dev/null 2>&1 || { err "claude CLI 미설치"; exit 1; }
+require_open_cmd() {
+  local bin="${CW_OPEN_CMD%% *}"
+  command -v "$bin" >/dev/null 2>&1 || { err "${bin} 미설치 ${C_DIM}(CW_OPEN_CMD로 변경 가능)${C_RESET}"; exit 1; }
+}
+
+# 워크트리로 cd 후 CW_OPEN_CMD exec. eval: 사용자가 쓴 따옴표·인자를 셸 문법대로 해석
+launch_agent() {
+  cd "$1"
+  eval "exec ${CW_OPEN_CMD}"
 }
 
 require_worktree() {
@@ -316,13 +326,12 @@ cmd_add() {
       echo "$wpath"
       exit 0
     fi
-    require_claude
-    info "기존 워크트리에서 claude 실행"
-    cd "$wpath"
-    exec claude --dangerously-skip-permissions
+    require_open_cmd
+    info "기존 워크트리에서 ${CW_OPEN_CMD%% *} 실행"
+    launch_agent "$wpath"
   fi
 
-  [ "$opt_no_open" -eq 1 ] || require_claude
+  [ "$opt_no_open" -eq 1 ] || require_open_cmd
 
   if [ "$opt_fetch" -eq 1 ]; then
     info "origin fetch 중..."
@@ -370,8 +379,7 @@ cmd_add() {
     exit 0
   fi
 
-  cd "$wpath"
-  exec claude --dangerously-skip-permissions
+  launch_agent "$wpath"
 }
 
 _tty_saved=""
@@ -589,7 +597,7 @@ worktree_action_menu() {
   fi
   local -a actions=(
     "Cursor에서 열기"
-    "Claude 실행"
+    "${CW_OPEN_CMD%% *} 실행"
     "경로 복사"
     "이름 복사"
     "cd 명령 출력"
@@ -602,9 +610,8 @@ worktree_action_menu() {
   case "$REPLY_PICK" in
     0) open_in_cursor "$wpath" ;;
     1)
-      require_claude
-      cd "$wpath"
-      exec claude --dangerously-skip-permissions
+      require_open_cmd
+      launch_agent "$wpath"
       ;;
     2)
       if copy_to_clipboard "$wpath"; then ok "클립보드(경로): $(_tilde_path "$wpath")"
@@ -794,9 +801,8 @@ cmd_open() {
     exit 1
   fi
   require_named open "$@"
-  require_claude
-  cd "$RESOLVED_PATH"
-  exec claude --dangerously-skip-permissions
+  require_open_cmd
+  launch_agent "$RESOLVED_PATH"
 }
 
 cmd_path() {
