@@ -3,7 +3,7 @@
 ![Release](https://img.shields.io/github/v/release/dunzkoi/cw?color=black)
 ![License](https://img.shields.io/github/license/dunzkoi/cw?color=blue)
 ![Homebrew](https://img.shields.io/badge/install-brew-orange)
-![Bash](https://img.shields.io/badge/bash-5%2B-4EAA25)
+![Bash](https://img.shields.io/badge/bash-3.2%2B-4EAA25)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 
 `git worktree` + `claude -w`를 대체하는 CLI. 워크트리 생성부터 claude 실행, 잠금, 일괄 정리까지 서브커맨드로 관리.
@@ -141,9 +141,12 @@ cw remove my-feature -f          # 강제 (변경사항 무시)
 ```
 
 ```bash
-cw clean                         # 메인 워크트리 현재 브랜치에 머지된 것만 일괄 삭제
+cw clean                         # 메인 워크트리 현재 브랜치에 머지된 것만 일괄 삭제 (목록 확인 후 [y/N])
 cw clean main                    # 기준 브랜치 명시 override
+cw clean -y                      # 확인 생략하고 바로 삭제 (스크립트용)
 ```
+
+`-y` 없이 stdin이 없으면(cron, 파이프 등) 목록만 보여 주고 삭제하지 않습니다.
 
 `clean` 정책:
 - 대상: `git worktree list`의 **모든 linked worktree** (메인·bare 제외). `.claude/worktrees`, `.worktrees`, `orca/workspaces/...` 등 경로 무관
@@ -168,6 +171,7 @@ cw repair                        # 레포 이동 후 워크트리 링크 복구
 | `-F` | `--fetch` | add | 생성 전 `git fetch origin` |
 | `-n` | `--no-open` | add | claude 실행 생략 |
 | `-f` | `--force` | remove | 더티 상태 무시 |
+| `-y` | `--yes` | clean | 삭제 전 확인 생략 |
 
 번들링 지원: `cw add foo -dFn main` = `cw add foo --detach --fetch --no-open main`
 
@@ -199,7 +203,7 @@ WT="$1"
 - **자동 hooksPath 차단** — 워크트리 생성 시 `core.hooksPath=/dev/null` (husky 등 중복 실행 방지)
 - **dirty 보호** — `cw remove`는 기본 안전 모드. 변경사항 있으면 `-f` 없이 차단
 - **잠금 우선** — 잠긴 워크트리는 `remove`/`clean`에서 스킵
-- **머지 체크** — `clean`/`prune`은 기준 브랜치에 실제 머지된 것만 자동 삭제
+- **머지 체크** — `clean`/`prune`/`remove`는 기준 브랜치에 patch-id(`git cherry`)로 머지가 확인된 것만 삭제 (`remove -f` 제외)
 - **TTY 감지** — 파이프/리다이렉트 시 색상 + 클립보드 복사 자동 비활성
 
 ## 주요 동작 플로우
@@ -214,12 +218,14 @@ WT="$1"
 
 ### `cw clean`
 1. 메인 워크트리의 현재 브랜치를 기준으로 선정 (override: `cw clean <base>`)
-2. 각 워크트리 반복:
+2. 각 워크트리 검사 (이 단계에서는 아무것도 지우지 않음):
+   - 관리 베이스의 stray 디렉토리, prunable → 삭제 후보
    - 잠금 → 스킵
-   - detached HEAD → `merge-base --is-ancestor` 체크
-   - 일반 브랜치 → `git branch --merged <base>` 체크
-3. 삭제 대상: `git worktree remove --force` + `git branch -D`
-4. 유지 대상 요약 + 수동 삭제 힌트 출력
+   - detached HEAD → `merge-base --is-ancestor` 체크 (dirty면 유지)
+   - 일반 브랜치 → `git cherry <base> <branch>`(patch-id)로 머지 판정. dirty면 유지, tip이 기준 ancestor이고 reflog≤1이면 유지
+3. 삭제 대상 목록 출력 → `삭제할까요? [y/N]` 확인 (`-y`면 생략, stdin EOF면 취소)
+4. 승인 시: `git worktree remove --force` + `git branch -D`
+5. 빈 부모 디렉토리·`git worktree prune` 정리, 유지 대상 요약 + 수동 삭제 힌트 출력
 
 ## 제약
 
