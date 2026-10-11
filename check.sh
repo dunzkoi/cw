@@ -342,6 +342,40 @@ t_lock_blocks_remove() {
   assert_dir_exists "$r/.claude/worktrees/lkr" "lock — 워크트리 잔존"
 }
 
+# 셋업: 같은 이름 x가 두 베이스에 존재 → admin 디렉토리 .worktrees/x=x, .claude/worktrees/x=x1
+# 둘 다 커밋 후 ff-merge (잠금만 없으면 clean 삭제 대상)
+_setup_same_name_bases() {
+  local r="$1" a="$1/.worktrees/x" b="$1/.claude/worktrees/x"
+  _add_worktree_at_base "$r" ".worktrees" "x" "wx"
+  echo a > "$a/a.txt" && git -C "$a" add a.txt && git -C "$a" commit -q -m a
+  git -C "$r" merge --ff-only wx -q
+  cw_run "$r" add x -n >/dev/null 2>&1
+  echo b > "$b/b.txt" && git -C "$b" add b.txt && git -C "$b" commit -q -m b
+  git -C "$r" merge --ff-only worktrees-x -q
+}
+
+# 잠금 판정이 basename(worktrees/x/locked)을 보면 엉뚱한 워크트리의 잠금을 읽음
+t_lock_same_name_dot_worktrees() {
+  local r="$1" out
+  _setup_same_name_bases "$r"
+  git -C "$r" worktree lock "$r/.worktrees/x"
+  out="$(cw_run "$r" clean main -y 2>&1)"
+  assert_dir_exists "$r/.worktrees/x" "[회귀] 동명 잠금 — 잠긴 .worktrees/x 유지"
+  assert_dir_missing "$r/.claude/worktrees/x" "[회귀] 동명 잠금 — 잠금 없는 .claude/worktrees/x 정리"
+  assert_not_contains "$out" "제거 실패" "[회귀] 동명 잠금 — 제거 실패 없음"
+}
+
+t_lock_same_name_claude_worktrees() {
+  local r="$1" out
+  _setup_same_name_bases "$r"
+  git -C "$r" worktree lock "$r/.claude/worktrees/x"
+  out="$(cw_run "$r" clean main -y 2>&1)"
+  assert_dir_exists "$r/.claude/worktrees/x" "[회귀] 동명 잠금 — 잠긴 .claude/worktrees/x 유지"
+  assert_dir_missing "$r/.worktrees/x" "[회귀] 동명 잠금 — 잠금 없는 .worktrees/x 정리"
+  assert_contains "$out" "잠금됨" "[회귀] 동명 잠금 — 잠금으로 판정"
+  assert_not_contains "$out" "제거 실패" "[회귀] 동명 잠금 — 삭제 대상에 안 올림"
+}
+
 t_move() {
   local r="$1"
   cw_run "$r" add old -n >/dev/null 2>&1
@@ -797,6 +831,8 @@ run_test "path"                         t_path
 run_test "path 없는 이름"               t_path_nonexistent
 run_test "lock + unlock"                t_lock_unlock
 run_test "lock이 remove 차단"           t_lock_blocks_remove
+run_test "[회귀] 동명 잠금 .worktrees"  t_lock_same_name_dot_worktrees
+run_test "[회귀] 동명 잠금 .claude"     t_lock_same_name_claude_worktrees
 run_test "move (이름 변경)"             t_move
 run_test "remove 깨끗"                  t_remove_clean
 run_test "remove .worktrees"              t_remove_worktrees_base

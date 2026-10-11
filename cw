@@ -210,9 +210,10 @@ require_worktree() {
   return 1
 }
 
+# admin 디렉토리는 basename이 겹치면 x1, x2로 갈리므로 워크트리 자신의 git-dir로 확인
 is_locked() {
   local wpath="$1"
-  [ -f "$(git rev-parse --git-common-dir 2>/dev/null)/worktrees/$(basename "$wpath")/locked" ]
+  [ -f "$(git -C "$wpath" rev-parse --absolute-git-dir 2>/dev/null)/locked" ]
 }
 
 # 워크트리의 dirty(uncommitted) 변경 목록 출력. 깨끗하면 빈 문자열.
@@ -912,7 +913,7 @@ cmd_clean() {
   # 등록된 linked worktree 전부 (메인·bare 제외) — orca/workspaces 등 외부 경로 포함
   # (워크트리별 git -C 호출이 부모 워크트리로 walk up 하는 사고 방지)
   collect_worktree_rows
-  local -a registered=() reg_branches=() reg_prunable=()
+  local -a registered=() reg_branches=() reg_prunable=() reg_locked=()
   local i n_all=${#_WT_PATHS[@]}
   for (( i=0; i<n_all; i++ )); do
     [ "${_WT_BARE[$i]:-0}" = "1" ] && continue
@@ -920,6 +921,7 @@ cmd_clean() {
     registered+=("${_WT_PATHS[$i]}")
     reg_branches+=("${_WT_BRANCHES[$i]}")
     reg_prunable+=("${_WT_PRUNABLE[$i]}")
+    reg_locked+=("${_WT_LOCKED[$i]}")
   done
 
   # stray = 관리 베이스 직속 디렉토리만 (외부 orca 경로는 git 등록분만 처리)
@@ -991,7 +993,7 @@ cmd_clean() {
       continue
     fi
 
-    if is_locked "$wtpath"; then
+    if [ "${reg_locked[$i_reg]}" = "1" ]; then
       [ "$is_tty" -eq 1 ] && printf '\r\033[K'
       skip "${prefix} 유지: ${name} ${branch:+(${branch}) }— 잠금됨"
       skipped=$((skipped + 1))
