@@ -53,7 +53,8 @@ spinner_stop() {
 }
 
 # 인터럽트/종료 시 스피너·커서 정리
-trap 'spinner_stop; printf "\033[?25h" > /dev/tty 2>/dev/null || true' EXIT INT TERM
+# 2>/dev/null을 /dev/tty보다 먼저: 제어 터미널 없는 환경(CI·에이전트)에서 열기 실패 에러까지 막음
+trap 'spinner_stop; printf "\033[?25h" 2>/dev/null >/dev/tty || true' EXIT INT TERM
 
 help() {
   cat <<EOF
@@ -381,11 +382,11 @@ tty_raw_on() {
   # min 1 time 0: 1바이트 올 때까지 블록 (bash 3.2 호환)
   stty -echo -icanon min 1 time 0 2>/dev/null || return 1
   # 커서 숨김 — 전체 clear 반복 시 깜빡임 완화
-  printf '\033[?25l' > /dev/tty 2>/dev/null || true
+  printf '\033[?25l' 2>/dev/null >/dev/tty || true
 }
 
 tty_raw_off() {
-  printf '\033[?25h' > /dev/tty 2>/dev/null || true
+  printf '\033[?25h' 2>/dev/null >/dev/tty || true
   [ -n "${_tty_saved:-}" ] && stty "$_tty_saved" 2>/dev/null || true
   _tty_saved=""
 }

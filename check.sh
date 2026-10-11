@@ -148,6 +148,11 @@ t_version() {
   assert_contains "$out" "cw" "version 출력"
   out="$(cw_run "$1" -v 2>&1)"
   assert_contains "$out" "cw" "-v 출력"
+  # 제어 터미널 없는 환경(CI·에이전트)에서 EXIT trap의 /dev/tty 에러 소음 없음
+  out="$(cw_run "$1" -v 2>&1 >/dev/null)"
+  assert_eq "$out" "" "-v — stderr 비어 있음"
+  out="$(NO_CLIPBOARD=1 cw_run "$1" path nope 2>&1 >/dev/null)"
+  assert_not_contains "$out" "/dev/tty" "에러 종료 — /dev/tty 소음 없음"
 }
 
 t_help() {
