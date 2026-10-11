@@ -226,12 +226,12 @@ worktree_dirty() {
 # branch의 모든 commit이 base에 patch-equivalent로 존재하면 0(effectively merged) 반환.
 # git cherry 출력: '+ <sha>' = base에 없는 commit, '- <sha>' = patch-id 매치 commit.
 # ancestor 케이스(branch가 base의 조상)도 빈 출력으로 동일 판정.
+# git cherry 실패(기준 브랜치 오타 등)는 머지 안 됨으로 본다 — 빈 출력을 머지로 오판하면 데이터 손실.
 # 한계: squash merge로 다수 commit이 1개로 합쳐지면 patch-id가 달라져 못 잡음.
 is_effectively_merged() {
-  local branch="$1" base="$2"
-  local unmerged
-  unmerged="$(git cherry "$base" "$branch" 2>/dev/null | awk '/^\+/ {c++} END {print c+0}')"
-  [ "${unmerged:-99}" -eq 0 ]
+  local branch="$1" base="$2" out
+  out="$(git cherry "$base" "$branch" 2>/dev/null)" || return 1
+  ! grep -q '^+' <<< "$out"
 }
 
 # 번들 단일 문자 옵션 확장: -Fn → -F -n
@@ -847,15 +847,20 @@ cmd_remove() {
     exit 1
   fi
 
-  # 머지 여부 선검증: 워크트리 제거 후 브랜치 삭제만 실패하는 반쪽 상태 방지
+  # 머지 여부 선검증 (clean과 같은 patch-id 판정): 워크트리 제거 후 브랜치 삭제만 실패하는 반쪽 상태 방지
+  local del_flag="-d"
+  [ "$opt_force" -eq 1 ] && del_flag="-D"
   if [ -n "$branch" ] && [ "$opt_force" -eq 0 ]; then
     local base_br
     base_br="$(merge_base_branch)"
-    if [ -n "$base_br" ] && [ "$base_br" != "$branch" ] \
-       && ! git branch --merged "$base_br" 2>/dev/null | grep -qw "$branch"; then
-      warn "브랜치 ${C_CYAN}${branch}${C_RESET} 머지 안 됨 (${C_CYAN}${base_br}${C_RESET} 기준) — 워크트리 유지"
-      hint "강제 삭제하려면: ${C_CYAN}cw remove ${name} -f${C_RESET}"
-      exit 1
+    if [ -n "$base_br" ] && [ "$base_br" != "$branch" ]; then
+      if ! is_effectively_merged "$branch" "$base_br"; then
+        warn "브랜치 ${C_CYAN}${branch}${C_RESET} 머지 안 됨 (${C_CYAN}${base_br}${C_RESET} 기준) — 워크트리 유지"
+        hint "강제 삭제하려면: ${C_CYAN}cw remove ${name} -f${C_RESET}"
+        exit 1
+      fi
+      # patch-equivalent(cherry-pick/rebase) 머지는 git branch -d가 거부 → 판정 통과 시 -D
+      del_flag="-D"
     fi
   fi
 
@@ -867,11 +872,7 @@ cmd_remove() {
   [ -d "$wpath" ] && rm -rf "$wpath"
 
   if [ -n "$branch" ]; then
-    if [ "$opt_force" -eq 1 ]; then
-      git branch -D "$branch" 2>/dev/null || true
-    else
-      git branch -d "$branch" 2>/dev/null || warn "브랜치 ${C_CYAN}${branch}${C_RESET} 삭제 실패. ${C_CYAN}git branch -D ${branch}${C_RESET}로 강제 삭제 가능"
-    fi
+    git branch "$del_flag" "$branch" 2>/dev/null || warn "브랜치 ${C_CYAN}${branch}${C_RESET} 삭제 실패. ${C_CYAN}git branch -D ${branch}${C_RESET}로 강제 삭제 가능"
   fi
 
   git worktree prune 2>/dev/null
@@ -1220,7 +1221,7 @@ cmd_prune() {
     [ -z "$br" ] && continue
     git show-ref --verify --quiet "refs/heads/${br}" || continue
 
-    if git branch --merged "$default_br" 2>/dev/null | grep -qw "$br"; then
+    if is_effectively_merged "$br" "$default_br"; then
       git branch -D "$br" 2>/dev/null && {
         ok "브랜치 삭제: ${C_BOLD}${br}${C_RESET} — ${default_br}에 머지됨"
         deleted=$((deleted + 1))

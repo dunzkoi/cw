@@ -655,6 +655,65 @@ t_prune() {
   assert_eq "$count" "0" "prune — prunable 메타데이터 정리"
 }
 
+# 셋업: .worktrees/f(feat, 미머지 커밋) + feat-x(main tip = 머지됨)
+# grep -w는 하이픈을 단어 경계로 봐서 feat-x 머지 시 feat도 머지로 오판했음
+_setup_feat_prefix() {
+  local r="$1"
+  _add_worktree_at_base "$r" ".worktrees" "f" "feat"
+  echo f > "$r/.worktrees/f/f.txt"
+  git -C "$r/.worktrees/f" add f.txt
+  git -C "$r/.worktrees/f" commit -q -m "feat"
+  git -C "$r" branch feat-x main
+}
+
+t_prune_prefix_unmerged_kept() {
+  local r="$1"
+  _setup_feat_prefix "$r"
+  rm -f "$r/.worktrees/f/.git"
+  cw_run "$r" prune >/dev/null 2>&1
+  assert_branch_exists "$r" "feat" "[회귀] prune — feat-x가 머지돼도 미머지 feat 유지"
+}
+
+t_remove_prefix_unmerged_refused() {
+  local r="$1" rc=0
+  _setup_feat_prefix "$r"
+  cw_run "$r" remove f >/dev/null 2>&1 || rc=$?
+  assert_exit 1 "$rc" "[회귀] remove — feat-x가 머지돼도 미머지 feat는 exit 1"
+  assert_dir_exists "$r/.worktrees/f" "[회귀] remove — 미머지 워크트리 유지"
+  assert_branch_exists "$r" "feat" "[회귀] remove — 미머지 브랜치 유지"
+}
+
+# cherry-pick으로 main에 흡수된 브랜치: clean과 같은 patch-id 판정으로 remove도 삭제
+t_remove_cherry_picked() {
+  local r="$1" rc=0 wp="$1/.claude/worktrees/cp1"
+  cw_run "$r" add cp1 -n >/dev/null 2>&1
+  echo y > "$wp/y.txt"
+  git -C "$wp" add y.txt
+  git -C "$wp" commit -q -m "feature y"
+  echo m > "$r/m.txt"
+  git -C "$r" add m.txt
+  git -C "$r" commit -q -m "main side"
+  git -C "$r" cherry-pick --quiet worktrees-cp1 >/dev/null 2>&1
+  cw_run "$r" remove cp1 >/dev/null 2>&1 || rc=$?
+  assert_exit 0 "$rc" "remove cherry-pick 흡수 — exit 0"
+  assert_dir_missing "$wp" "remove cherry-pick 흡수 — 워크트리 삭제"
+  assert_branch_missing "$r" "worktrees-cp1" "remove cherry-pick 흡수 — 브랜치 삭제"
+}
+
+# 기준 브랜치 오타: git cherry 실패를 머지로 오판하면 clean/prune이 미머지 브랜치를 지움
+t_bad_base_keeps_unmerged() {
+  local r="$1" wp="$1/.claude/worktrees/bb"
+  cw_run "$r" add bb -n >/dev/null 2>&1
+  echo c > "$wp/c.txt"
+  git -C "$wp" add c.txt
+  git -C "$wp" commit -q -m "c"
+  cw_run "$r" clean nope -y >/dev/null 2>&1
+  assert_dir_exists "$wp" "[회귀] clean 기준 오타 — 미머지 워크트리 유지"
+  rm -f "$wp/.git"
+  cw_run "$r" prune nope >/dev/null 2>&1
+  assert_branch_exists "$r" "worktrees-bb" "[회귀] prune 기준 오타 — 미머지 브랜치 유지"
+}
+
 # 관리 베이스(.claude/worktrees, .worktrees) 밖 linked worktree도 clean 대상
 t_clean_external_merged() {
   local r="$1"
@@ -738,6 +797,10 @@ run_test "clean stray 디렉토리"         t_clean_stray_dir
 run_test "clean prunable"               t_clean_prunable
 run_test "clean 혼합 시나리오"          t_clean_mixed
 run_test "prune"                        t_prune
+run_test "[회귀] prune 접두 이름 미머지" t_prune_prefix_unmerged_kept
+run_test "[회귀] remove 접두 이름 미머지" t_remove_prefix_unmerged_refused
+run_test "remove cherry-pick 흡수"      t_remove_cherry_picked
+run_test "[회귀] 기준 브랜치 오타"      t_bad_base_keeps_unmerged
 run_test "clean 외부 경로 머지"         t_clean_external_merged
 run_test "clean/remove 외부 경로"       t_clean_external_unmerged_kept
 

@@ -23,7 +23,7 @@
 - Homebrew/install.sh로 단일 `cw` 스크립트 배포 가능
 
 ## Load-bearing notes
-- `git cherry`(patch-id)로 rebase/cherry-pick 머지를 잡음
+- `git cherry`(patch-id)로 rebase/cherry-pick 머지를 잡음 — clean·remove·prune 모두 `is_effectively_merged` 한 경로. `git cherry` 실패(기준 오타)는 머지 안 됨
 - tip이 기준의 ancestor이고 reflog≤1이면 유지 (orca 주차/미작업). tip이 ancestor가 아닌데 cherry0이면 빈 reflog여도 삭제(patch-merged)
 - tip==기준 tip + reflog>1 이면 ff-merge로 보고 삭제
 - porcelain 파싱은 `collect_worktree_rows` 한 경로를 list/clean이 공유 (워크트리별 `git -C` walk-up 사고 방지)
