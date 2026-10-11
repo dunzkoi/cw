@@ -72,6 +72,13 @@ chmod +x ~/.local/bin/cw
 
 `NO_COLOR=1` 환경변수로 색상 비활성화 가능.
 
+### 자동완성
+```bash
+eval "$(cw completion zsh)"      # ~/.zshrc (compinit 뒤)
+eval "$(cw completion bash)"     # ~/.bashrc
+```
+서브커맨드와 `open`·`path`·`remove` 등의 워크트리 이름을 Tab으로 완성합니다.
+
 ## 사용법
 
 ### 생성 + 진입

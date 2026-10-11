@@ -78,6 +78,7 @@ ${C_BOLD}Commands:${C_RESET}
   ${C_CYAN}move${C_RESET} <name> <new-name>          워크트리 이름 변경
   ${C_CYAN}prune${C_RESET} [base]                    stale 참조 정리 (기본: 메인 워크트리의 현재 브랜치)
   ${C_CYAN}repair${C_RESET}                          워크트리 링크 복구 (레포 이동 후)
+  ${C_CYAN}completion${C_RESET} zsh|bash             셸 자동완성 스크립트 출력 (eval "\$(cw completion zsh)")
   ${C_CYAN}help${C_RESET}                            이 도움말
   ${C_CYAN}-v, --version${C_RESET}                   버전 출력
 
@@ -1254,6 +1255,48 @@ cmd_prune() {
   fi
 }
 
+# 자동완성 스크립트 출력. 이름 후보는 숨은 서브커맨드 `cw __names`가 런타임에 제공.
+cmd_completion() {
+  local cmds="add list open path cd cursor name remove clean lock unlock move prune repair help completion"
+  local named="open path cd cursor name remove lock unlock move"
+  case "${1:-}" in
+    zsh|bash) ;;
+    *) err "Usage: cw completion zsh|bash"; exit 1 ;;
+  esac
+  printf '_cw_cmds="%s"\n_cw_named=" %s "\n' "$cmds" "$named"
+  if [ "$1" = zsh ]; then
+    cat <<'COMP'
+_cw() {
+  case "$CURRENT:$words[2]" in
+    2:*) compadd -- ${=_cw_cmds} ;;
+    3:completion) compadd -- zsh bash ;;
+    3:*) [[ $_cw_named == *" $words[2] "* ]] && compadd -- ${(f)"$(cw __names 2>/dev/null)"} ;;
+  esac
+}
+compdef _cw cw
+COMP
+  else
+    cat <<'COMP'
+_cw() {
+  local cur="${COMP_WORDS[COMP_CWORD]}" words
+  COMPREPLY=()
+  case "$COMP_CWORD:${COMP_WORDS[1]}" in
+    1:*) words="$_cw_cmds" ;;
+    2:completion) words="zsh bash" ;;
+    2:*)
+      [[ "$_cw_named" == *" ${COMP_WORDS[1]} "* ]] || return 0
+      local IFS=$'\n'
+      words="$(cw __names 2>/dev/null)"
+      ;;
+    *) return 0 ;;
+  esac
+  COMPREPLY=($(compgen -W "$words" -- "$cur"))
+}
+complete -F _cw cw
+COMP
+  fi
+}
+
 cmd_repair() {
   require_repo
   git worktree repair
@@ -1275,6 +1318,8 @@ case "${1:-help}" in
   move)   shift; cmd_move "$@" ;;
   prune)  shift; cmd_prune "$@" ;;
   repair) cmd_repair ;;
+  completion) shift; cmd_completion "$@" ;;
+  __names) require_repo; list_managed_worktree_names | sort -u ;;
   --version|-v) echo "cw ${CW_VERSION}" ;;
   help|--help|-h) help ;;
   *)

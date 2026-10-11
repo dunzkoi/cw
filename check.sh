@@ -328,6 +328,28 @@ t_open_cmd_env() {
   assert_exit 1 "$rc" "CW_OPEN_CMD — 없는 명령이면 exit 1"
 }
 
+# 자동완성: __names가 이름 후보를, completion이 셸 스크립트를 출력
+t_completion() {
+  local r="$1" out rc=0 names
+  names="c1"$'\n'"fix/c2"
+  cw_run "$r" add c1 -n >/dev/null 2>&1
+  cw_run "$r" add fix/c2 -n >/dev/null 2>&1
+  out="$(cw_run "$r" __names 2>/dev/null)"
+  assert_eq "$out" "$names" "__names — 워크트리 이름 출력"
+  cw_run "$r" completion zsh >/dev/null 2>&1 || rc=$?
+  assert_exit 0 "$rc" "completion zsh — exit 0"
+  # 완성 함수 실제 호출: open 뒤 이름 후보 (cw는 PATH에서 찾음)
+  out="$(PATH="$SCRIPT_DIR:$PATH" HOME="$r" bash -c \
+    'eval "$(cw completion bash)"; COMP_WORDS=(cw open ""); COMP_CWORD=2; _cw; printf "%s\n" "${COMPREPLY[@]}"')"
+  assert_eq "$out" "$names" "completion bash — open 이름 후보"
+  if command -v zsh >/dev/null 2>&1; then
+    # compinit 없이 compadd를 출력 함수로 대체해 로직만 검사
+    out="$(PATH="$SCRIPT_DIR:$PATH" HOME="$r" zsh -fc \
+      'compdef() {}; eval "$(cw completion zsh)"; compadd() { print -l -- "${@:#--}"; }; words=(cw open ""); CURRENT=3; _cw')"
+    assert_eq "$out" "$names" "completion zsh — open 이름 후보"
+  fi
+}
+
 t_path_nonexistent() {
   local r="$1"
   local rc=0
@@ -849,6 +871,7 @@ run_test "name + 클립보드"              t_name_worktrees_base
 run_test "path"                         t_path
 run_test "path 없는 이름"               t_path_nonexistent
 run_test "CW_OPEN_CMD"                  t_open_cmd_env
+run_test "자동완성"                     t_completion
 run_test "lock + unlock"                t_lock_unlock
 run_test "lock이 remove 차단"           t_lock_blocks_remove
 run_test "[회귀] 동명 잠금 .worktrees"  t_lock_same_name_dot_worktrees
