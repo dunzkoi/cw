@@ -237,10 +237,17 @@ worktree_dirty() {
 # git cherry 출력: '+ <sha>' = base에 없는 commit, '- <sha>' = patch-id 매치 commit.
 # ancestor 케이스(branch가 base의 조상)도 빈 출력으로 동일 판정.
 # git cherry 실패(기준 브랜치 오타 등)는 머지 안 됨으로 본다 — 빈 출력을 머지로 오판하면 데이터 손실.
-# 한계: squash merge로 다수 commit이 1개로 합쳐지면 patch-id가 달라져 못 잡음.
+# squash merge(다수 commit → 1개): merge-base 위에 branch tree를 얹은 임시 commit 하나로 다시 cherry.
+# 임시 commit은 ref 없는 객체라 gc가 치운다. merge-base·commit-tree 실패는 머지 안 됨.
 is_effectively_merged() {
-  local branch="$1" base="$2" out
+  local branch="$1" base="$2" out mb tmp
   out="$(git cherry "$base" "$branch" 2>/dev/null)" || return 1
+  grep -q '^+' <<< "$out" || return 0
+  mb="$(git merge-base "$base" "$branch" 2>/dev/null)" || return 1
+  # 서명·사용자 설정에 막히지 않게 고정 ident + 서명 끔
+  tmp="$(git -c user.name=cw -c user.email=cw@localhost commit-tree --no-gpg-sign \
+    "${branch}^{tree}" -p "$mb" -m "cw squash check" 2>/dev/null)" || return 1
+  out="$(git cherry "$base" "$tmp" 2>/dev/null)" || return 1
   ! grep -q '^+' <<< "$out"
 }
 
@@ -1059,13 +1066,13 @@ cmd_clean() {
       continue
     fi
 
-    # patch-id 기반 머지 판정 (rebase/cherry-pick 커버, squash 다→1은 한계).
+    # patch-id 기반 머지 판정 (rebase/cherry-pick/squash 커버, is_effectively_merged).
     # cherry0 이어도 유형이 갈림:
     #   A) tip이 기준의 ancestor (옛 main에 주차) + reflog≤1 → orca/미작업 유지
     #   B) tip이 기준의 ancestor + reflog>1 → ff-merge 후 main만 전진 → 삭제
     #   C) tip==기준 tip + reflog≤1 → 방금 생성 미작업 → 유지
     #   D) tip==기준 tip + reflog>1 → 방금 ff-merge → 삭제
-    #   E) tip이 ancestor 아님 + cherry0 → patch-equivalent 머지(15764) → 삭제 (빈 reflog여도)
+    #   E) tip이 ancestor 아님 + cherry0 → patch-equivalent·squash 머지(15764) → 삭제 (빈 reflog여도)
     if is_effectively_merged "$branch" "$default_br"; then
       local dirty
       dirty="$(worktree_dirty "$wtpath")"

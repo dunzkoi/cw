@@ -25,6 +25,7 @@
 
 ## Load-bearing notes
 - `git cherry`(patch-id)로 rebase/cherry-pick 머지를 잡음 — clean·remove·prune 모두 `is_effectively_merged` 한 경로. `git cherry` 실패(기준 오타)는 머지 안 됨
+- squash 머지: cherry에 `+`가 남으면 merge-base 위에 branch tree를 얹은 임시 commit(`commit-tree --no-gpg-sign`)으로 다시 cherry. merge-base·commit-tree 실패는 머지 안 됨
 - tip이 기준의 ancestor이고 reflog≤1이면 유지 (orca 주차/미작업). tip이 ancestor가 아닌데 cherry0이면 빈 reflog여도 삭제(patch-merged)
 - tip==기준 tip + reflog>1 이면 ff-merge로 보고 삭제
 - detached도 같은 reflog 규칙: HEAD가 기준 ancestor여도 워크트리 HEAD reflog(`git -C <wt> reflog show HEAD`)≤1이면 미작업/주차로 유지

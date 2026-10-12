@@ -150,7 +150,7 @@ cw clean -y                      # 확인 생략하고 바로 삭제 (스크립�
 
 `clean` 정책:
 - 대상: `git worktree list`의 **모든 linked worktree** (메인·bare 제외). `.claude/worktrees`, `.worktrees`, `orca/workspaces/...` 등 경로 무관
-- 머지 판정: `git cherry`(patch-id) — rebase/cherry-pick 흡수분 포함
+- 머지 판정: `git cherry`(patch-id) — rebase/cherry-pick 흡수분 포함. 남는 커밋이 있으면 브랜치 전체 diff를 커밋 하나로 합쳐 다시 비교해 squash 머지(GitHub PR squash 등)도 머지로 봄
 - tip이 기준 **ancestor**이고 reflog≤1 → 유지 (orca 주차·미작업). ancestor가 아닌데 cherry0 → 삭제(빈 reflog여도, 예: 15764)
 - tip==기준 tip + reflog>1 → ff-merge로 삭제
 - 잠긴·dirty·머지 안 됨 → 스킵 (끝에 `cw remove <name> -f` 힌트)
@@ -222,7 +222,7 @@ WT="$1"
    - 관리 베이스의 stray 디렉토리, prunable → 삭제 후보
    - 잠금 → 스킵
    - detached HEAD → `merge-base --is-ancestor` 체크 (dirty거나 HEAD reflog≤1이면 유지)
-   - 일반 브랜치 → `git cherry <base> <branch>`(patch-id)로 머지 판정. dirty면 유지, tip이 기준 ancestor이고 reflog≤1이면 유지
+   - 일반 브랜치 → `git cherry <base> <branch>`(patch-id)로 머지 판정(squash 머지는 브랜치 전체 diff로 재확인). dirty면 유지, tip이 기준 ancestor이고 reflog≤1이면 유지
 3. 삭제 대상 목록 출력 → `삭제할까요? [y/N]` 확인 (`-y`면 생략, stdin EOF면 취소)
 4. 승인 시: `git worktree remove --force` + `git branch -D`
 5. 빈 부모 디렉토리·`git worktree prune` 정리, 유지 대상 요약 + 수동 삭제 힌트 출력

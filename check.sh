@@ -658,6 +658,44 @@ t_clean_rebase_merged_removed() {
     "[회귀] clean — rebase 후 머지 브랜치 삭제"
 }
 
+# 셋업: <name> 워크트리에 커밋 2개(<name>1, <name>2 파일). 세 번째 인자가 있으면 그 커밋까지 main에 squash 머지
+_setup_squash() {
+  local r="$1" name="$2" upto="${3:-}" wp="$1/.claude/worktrees/$2" f
+  cw_run "$r" add "$name" -n >/dev/null 2>&1
+  for f in "${name}1" "${name}2"; do
+    echo "$f" > "$wp/$f"
+    git -C "$wp" add "$f"
+    git -C "$wp" commit -q -m "$f"
+  done
+  [ -n "$upto" ] || return 0
+  git -C "$r" merge --squash -q "$upto" >/dev/null 2>&1
+  git -C "$r" commit -q -m "squash ${name}"
+}
+
+# squash 머지(커밋 2개 → 1개)는 git cherry patch-id로 못 잡음 → 합친 diff로 재확인
+t_clean_squash_merged() {
+  local r="$1"
+  _setup_squash "$r" sqf worktrees-sqf
+  _setup_squash "$r" sqp worktrees-sqp~1
+  cw_run "$r" clean -y >/dev/null 2>&1
+  assert_dir_missing "$r/.claude/worktrees/sqf" "clean — squash 머지 워크트리 삭제"
+  assert_branch_missing "$r" "worktrees-sqf" "clean — squash 머지 브랜치 삭제"
+  assert_dir_exists "$r/.claude/worktrees/sqp" "clean — 일부만 squash 머지된 워크트리 유지"
+  assert_branch_exists "$r" "worktrees-sqp" "clean — 일부만 squash 머지된 브랜치 유지"
+}
+
+t_remove_prune_squash_merged() {
+  local r="$1" rc=0
+  _setup_squash "$r" sqr worktrees-sqr
+  _setup_squash "$r" sqn worktrees-sqn
+  cw_run "$r" remove sqr >/dev/null 2>&1 || rc=$?
+  assert_exit 0 "$rc" "remove squash 머지 — exit 0"
+  assert_branch_missing "$r" "worktrees-sqr" "remove squash 머지 — 브랜치 삭제"
+  rm -f "$r/.claude/worktrees/sqn/.git"
+  cw_run "$r" prune >/dev/null 2>&1
+  assert_branch_missing "$r" "worktrees-sqn" "prune squash 머지 — 브랜치 삭제"
+}
+
 # 회귀 테스트: detached HEAD에서도 dirty 보호
 t_clean_detached_dirty_kept() {
   local r="$1"
@@ -951,6 +989,8 @@ run_test "[회귀] clean dirty+옛base"    t_clean_dirty_old_base_kept
 run_test "[회귀] clean 옛base 주차보존" t_clean_old_base_no_work_kept
 run_test "[회귀] clean patch+빈reflog"  t_clean_patch_merged_empty_reflog
 run_test "[회귀] clean rebase 머지"     t_clean_rebase_merged_removed
+run_test "clean squash 머지"            t_clean_squash_merged
+run_test "remove/prune squash 머지"     t_remove_prune_squash_merged
 run_test "[회귀] clean detached dirty"  t_clean_detached_dirty_kept
 run_test "[회귀] clean detached 미작업" t_clean_detached_untouched_kept
 run_test "clean 머지 안 된 보존"        t_clean_unmerged_kept
