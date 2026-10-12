@@ -111,6 +111,8 @@ ${C_BOLD}Env:${C_RESET}
   ${C_DIM}CW_OPEN_CMD${C_RESET}  add/open이 실행할 명령 (기본: claude --dangerously-skip-permissions)
   ${C_DIM}${INIT_HOOK}${C_RESET}
             존재 시 cw add 완료 후 실행 (인자: 워크트리 경로)
+  ${C_DIM}<repo>/.worktreeinclude${C_RESET}
+            cw add가 여기 맞는 gitignore 파일(.env 등)을 새 워크트리로 복사
 EOF
   exit 0
 }
@@ -380,6 +382,26 @@ cmd_add() {
 
   if [ "$opt_lock" -eq 1 ]; then
     git worktree lock "$wpath" 2>/dev/null && ok "잠금 적용"
+  fi
+
+  # claude -w 호환: .worktreeinclude(.gitignore 문법)에 맞고 git이 무시하는 파일(.env 등)을 복사
+  # -z: 한글 등 비ASCII 경로가 따옴표 이스케이프로 깨지지 않게
+  if [ -f "${REPO_ROOT}/.worktreeinclude" ]; then
+    local inc copied=0 p link
+    while IFS= read -r -d '' inc; do
+      # 브랜치가 추적하는 경로(심링크 포함)는 건드리지 않음 — 심링크를 따라 워크트리 밖에 쓰는 것 방지
+      link=0; p="$inc"
+      while [ "$p" != "${p%/*}" ]; do p="${p%/*}"; [ -L "${wpath}/${p}" ] && link=1; done
+      if [ "$link" -eq 1 ] || [ -e "${wpath}/${inc}" ] || [ -L "${wpath}/${inc}" ]; then
+        warn ".worktreeinclude 건너뜀 (워크트리에 이미 있거나 심링크 경로): ${inc}"
+      elif mkdir -p "$(dirname "${wpath}/${inc}")" && cp -p "${REPO_ROOT}/${inc}" "${wpath}/${inc}"; then
+        copied=$((copied + 1))
+      else
+        warn ".worktreeinclude 복사 실패: ${inc}"
+      fi
+    done < <(git -C "$REPO_ROOT" ls-files -z --others --ignored --exclude-from=.worktreeinclude 2>/dev/null \
+      | git -C "$REPO_ROOT" check-ignore -z --stdin 2>/dev/null)
+    ok ".worktreeinclude: 파일 ${copied}개 복사"
   fi
 
   if [ -x "$INIT_HOOK" ]; then

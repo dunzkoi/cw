@@ -213,6 +213,47 @@ t_add_hookspath_worktree_only() {
   assert_eq "$(git -C "$r/.claude/worktrees/hk" config core.hooksPath)" "/dev/null" "add — 새 워크트리만 hooksPath=/dev/null"
 }
 
+# 셋업: .env·config/secret.json·debug.log(무시 파일) + dirty README, .worktreeinclude에 .env·config/secret.json·README
+_setup_worktreeinclude() {
+  local r="$1"
+  printf '.env\nconfig/\n*.log\n' > "$r/.gitignore"
+  git -C "$r" add .gitignore
+  git -C "$r" commit -q -m "ignore"
+  mkdir -p "$r/config"
+  echo "KEY=1" > "$r/.env"
+  echo '{"s":1}' > "$r/config/secret.json"
+  echo "log" > "$r/debug.log"
+  echo "dirty" > "$r/README"
+  printf '.env\nconfig/secret.json\nREADME\n' > "$r/.worktreeinclude"
+}
+
+# .worktreeinclude: 목록에 맞고 gitignore된 파일만 새 워크트리로 복사 (claude -w 호환)
+t_add_worktreeinclude() {
+  local r="$1" wp="$1/.claude/worktrees/inc"
+  _setup_worktreeinclude "$r"
+  cw_run "$r" add inc -n >/dev/null 2>&1
+  assert_eq "$(cat "$wp/.env" 2>/dev/null)" "KEY=1" ".worktreeinclude — .env 복사"
+  assert_eq "$(cat "$wp/config/secret.json" 2>/dev/null)" '{"s":1}' ".worktreeinclude — 하위 경로 파일 복사"
+  assert_eq "$(cat "$wp/README")" "init" ".worktreeinclude — 추적 파일은 커밋 내용 그대로"
+  if [ ! -e "$wp/debug.log" ]; then pass ".worktreeinclude — 목록에 없는 무시 파일은 복사 안 함"
+  else fail ".worktreeinclude — 목록에 없는 debug.log 복사됨"; fi
+}
+
+# 브랜치가 config를 외부 디렉토리 심링크로 추적해도 그 심링크를 따라 워크트리 밖에 쓰지 않음
+t_add_worktreeinclude_symlink() {
+  local r="$1" ext blob tree
+  ext="$(mktemp -d -t cw-ext.XXXXXX)"
+  _setup_worktreeinclude "$r"
+  blob="$(printf '%s' "$ext" | git -C "$r" hash-object -w --stdin)"
+  tree="$( (git -C "$r" ls-tree main; printf '120000 blob %s\tconfig\n' "$blob") | git -C "$r" mktree)"
+  git -C "$r" branch evil "$(git -C "$r" commit-tree "$tree" -p main -m evil)"
+  cw_run "$r" add ev evil -n >/dev/null 2>&1
+  if [ ! -e "$ext/secret.json" ]; then pass "[보안] .worktreeinclude — 추적 심링크 밖으로 복사 안 함"
+  else fail "[보안] .worktreeinclude — 심링크 따라 워크트리 밖에 씀 ($ext/secret.json)"; fi
+  assert_eq "$(cat "$r/.claude/worktrees/ev/.env" 2>/dev/null)" "KEY=1" ".worktreeinclude — 심링크 아닌 파일은 복사"
+  rm -rf "$ext"
+}
+
 t_add_no_open_outputs_path() {
   local r="$1"
   local out
@@ -979,6 +1020,8 @@ run_test "add 중첩 경로"                t_add_nested
 run_test "add detached HEAD"            t_add_detached
 run_test "add lock 옵션"                t_add_locked
 run_test "[회귀] add hooksPath 워크트리 한정" t_add_hookspath_worktree_only
+run_test "add .worktreeinclude 복사"    t_add_worktreeinclude
+run_test "[보안] .worktreeinclude 심링크" t_add_worktreeinclude_symlink
 run_test "add -n 경로 출력"             t_add_no_open_outputs_path
 run_test "list"                         t_list
 run_test "path .worktrees 베이스"       t_path_worktrees_base

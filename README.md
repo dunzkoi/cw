@@ -176,6 +176,17 @@ cw repair                        # 레포 이동 후 워크트리 링크 복구
 
 번들링 지원: `cw add foo -dFn main` = `cw add foo --detach --fetch --no-open main`
 
+## .worktreeinclude
+
+레포 루트에 `.worktreeinclude`(`.gitignore` 문법)가 있으면 `cw add`가 거기 맞는 파일 중 **git이 무시하는 파일만** 메인 워크트리에서 새 워크트리의 같은 경로로 복사합니다 (`claude -w`와 같은 규칙, init hook보다 먼저). 추적 파일은 복사하지 않고, 새 워크트리에 이미 있는 경로나 심링크를 거치는 경로는 건너뜁니다.
+
+```gitignore
+# .worktreeinclude
+.env
+.env.local
+config/secret.json
+```
+
 ## Init Hook
 
 `~/.claude/worktree-init.sh`가 실행 가능하면 `cw add` 완료 후 자동 실행 (인자: 새 워크트리 경로).
@@ -214,8 +225,9 @@ WT="$1"
 2. 기존 브랜치 존재 확인 → 있으면 체크아웃 (base 인자 경고), 없으면 신규 생성
 3. 해당 워크트리에만 `core.hooksPath /dev/null` 설정 (`extensions.worktreeConfig` 켬, 실패 시 경고 후 생략)
 4. `--lock` 시 즉시 잠금
-5. `~/.claude/worktree-init.sh` 실행
-6. `--no-open` 아니면 `cd` + `exec $CW_OPEN_CMD` (기본 `claude --dangerously-skip-permissions`)
+5. `.worktreeinclude`에 맞는 gitignore 파일 복사
+6. `~/.claude/worktree-init.sh` 실행
+7. `--no-open` 아니면 `cd` + `exec $CW_OPEN_CMD` (기본 `claude --dangerously-skip-permissions`)
 
 ### `cw clean`
 1. 메인 워크트리의 현재 브랜치를 기준으로 선정 (override: `cw clean <base>`, `-F`면 fetch 후 `origin/<기준>`)
