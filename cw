@@ -1045,6 +1045,12 @@ cmd_clean() {
           skipped=$((skipped + 1))
           continue
         fi
+        # 브랜치와 같은 규칙: 워크트리 HEAD reflog≤1이면 미작업/주차 → 유지
+        if [ "$(git -C "$wtpath" reflog show HEAD 2>/dev/null | wc -l | tr -d ' ')" -le 1 ]; then
+          skip "${prefix} 유지: ${name} (detached) — 기준 브랜치에 포함된 HEAD (미작업/주차)"
+          skipped=$((skipped + 1))
+          continue
+        fi
         plan+=("wt|${wtpath}||${name}|detached ${head_sha:0:10}, ${default_br}에 포함됨")
       else
         skip "${prefix} 유지: ${name} — detached HEAD (${head_sha:0:10}) 미포함"

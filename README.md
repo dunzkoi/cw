@@ -154,7 +154,7 @@ cw clean -y                      # 확인 생략하고 바로 삭제 (스크립�
 - tip이 기준 **ancestor**이고 reflog≤1 → 유지 (orca 주차·미작업). ancestor가 아닌데 cherry0 → 삭제(빈 reflog여도, 예: 15764)
 - tip==기준 tip + reflog>1 → ff-merge로 삭제
 - 잠긴·dirty·머지 안 됨 → 스킵 (끝에 `cw remove <name> -f` 힌트)
-- detached HEAD → HEAD가 기준 브랜치 ancestor면 삭제(dirty면 유지)
+- detached HEAD → HEAD가 기준 브랜치 ancestor면 삭제. dirty거나 워크트리 HEAD reflog≤1(방금 만든 미작업)이면 유지
 - stray 디렉토리 삭제는 관리 베이스(`.claude/worktrees`, `.worktrees`) 안에서만
 
 ```bash
@@ -221,7 +221,7 @@ WT="$1"
 2. 각 워크트리 검사 (이 단계에서는 아무것도 지우지 않음):
    - 관리 베이스의 stray 디렉토리, prunable → 삭제 후보
    - 잠금 → 스킵
-   - detached HEAD → `merge-base --is-ancestor` 체크 (dirty면 유지)
+   - detached HEAD → `merge-base --is-ancestor` 체크 (dirty거나 HEAD reflog≤1이면 유지)
    - 일반 브랜치 → `git cherry <base> <branch>`(patch-id)로 머지 판정. dirty면 유지, tip이 기준 ancestor이고 reflog≤1이면 유지
 3. 삭제 대상 목록 출력 → `삭제할까요? [y/N]` 확인 (`-y`면 생략, stdin EOF면 취소)
 4. 승인 시: `git worktree remove --force` + `git branch -D`

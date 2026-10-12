@@ -668,6 +668,20 @@ t_clean_detached_dirty_kept() {
     "[회귀] clean — detached + dirty 보존"
 }
 
+# 회귀: 방금 만든 detached(HEAD reflog≤1)는 기준 ancestor여도 유지, 커밋 후 머지된 detached는 삭제
+t_clean_detached_untouched_kept() {
+  local r="$1" wp2="$1/.claude/worktrees/d2"
+  cw_run "$r" add d1 -d -n >/dev/null 2>&1
+  cw_run "$r" add d2 -d -n >/dev/null 2>&1
+  echo d > "$wp2/d.txt"
+  git -C "$wp2" add d.txt
+  git -C "$wp2" commit -q -m "d2"
+  git -C "$r" merge --ff-only "$(git -C "$wp2" rev-parse HEAD)" -q
+  cw_run "$r" clean -y >/dev/null 2>&1
+  assert_dir_exists "$r/.claude/worktrees/d1" "[회귀] clean — 미작업 detached 보존"
+  assert_dir_missing "$wp2" "clean — 커밋이 기준에 들어간 detached 삭제"
+}
+
 t_clean_unmerged_kept() {
   local r="$1"
   cw_run "$r" add cm2 -n >/dev/null 2>&1
@@ -938,6 +952,7 @@ run_test "[회귀] clean 옛base 주차보존" t_clean_old_base_no_work_kept
 run_test "[회귀] clean patch+빈reflog"  t_clean_patch_merged_empty_reflog
 run_test "[회귀] clean rebase 머지"     t_clean_rebase_merged_removed
 run_test "[회귀] clean detached dirty"  t_clean_detached_dirty_kept
+run_test "[회귀] clean detached 미작업" t_clean_detached_untouched_kept
 run_test "clean 머지 안 된 보존"        t_clean_unmerged_kept
 run_test "[회귀] clean 중첩 보존"       t_clean_nested_unmerged_preserved
 run_test "clean 중첩 머지된 삭제"       t_clean_nested_merged_removed
