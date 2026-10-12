@@ -338,6 +338,13 @@ cmd_add() {
 
   mkdir -p "${REPO_ROOT}/${DEFAULT_WORKTREE_BASE}"
 
+  # hooksPath를 새 워크트리에만 쓰려면 worktreeConfig 필요 — 없이 쓰면 공유 .git/config라 메인 hook까지 꺼짐
+  local worktree_config=1
+  git config extensions.worktreeConfig true 2>/dev/null || {
+    worktree_config=0
+    warn "extensions.worktreeConfig 설정 실패 — hooksPath 차단 생략"
+  }
+
   info "워크트리 생성: ${C_BOLD}${wpath}${C_RESET}"
 
   if [ "$opt_detach" -eq 1 ]; then
@@ -359,7 +366,9 @@ cmd_add() {
     fi
   fi
 
-  git -C "$wpath" config core.hooksPath /dev/null 2>/dev/null || true
+  if [ "$worktree_config" -eq 1 ]; then
+    git -C "$wpath" config --worktree core.hooksPath /dev/null 2>/dev/null || warn "hooksPath 차단 실패 (계속 진행)"
+  fi
 
   if [ "$opt_lock" -eq 1 ]; then
     git worktree lock "$wpath" 2>/dev/null && ok "잠금 적용"

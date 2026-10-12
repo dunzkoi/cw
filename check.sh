@@ -204,6 +204,15 @@ t_add_locked() {
   fi
 }
 
+# 회귀: hooksPath를 공유 .git/config에 쓰면 메인 레포·다른 워크트리의 husky hook까지 꺼짐
+t_add_hookspath_worktree_only() {
+  local r="$1"
+  git -C "$r" config core.hooksPath .husky/_
+  cw_run "$r" add hk -n >/dev/null 2>&1
+  assert_eq "$(git -C "$r" config core.hooksPath)" ".husky/_" "[회귀] add — 메인 레포 hooksPath 유지"
+  assert_eq "$(git -C "$r/.claude/worktrees/hk" config core.hooksPath)" "/dev/null" "add — 새 워크트리만 hooksPath=/dev/null"
+}
+
 t_add_no_open_outputs_path() {
   local r="$1"
   local out
@@ -866,6 +875,7 @@ run_test "add 커스텀 브랜치"            t_add_custom_branch
 run_test "add 중첩 경로"                t_add_nested
 run_test "add detached HEAD"            t_add_detached
 run_test "add lock 옵션"                t_add_locked
+run_test "[회귀] add hooksPath 워크트리 한정" t_add_hookspath_worktree_only
 run_test "add -n 경로 출력"             t_add_no_open_outputs_path
 run_test "list"                         t_list
 run_test "path .worktrees 베이스"       t_path_worktrees_base

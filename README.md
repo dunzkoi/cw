@@ -200,7 +200,7 @@ WT="$1"
 
 ## 안전장치
 
-- **자동 hooksPath 차단** — 워크트리 생성 시 `core.hooksPath=/dev/null` (husky 등 중복 실행 방지)
+- **자동 hooksPath 차단** — 새 워크트리에만 `core.hooksPath=/dev/null` 적용 (`extensions.worktreeConfig` + `git config --worktree`). 메인 레포·다른 워크트리의 husky 등 hook은 그대로
 - **dirty 보호** — `cw remove`는 기본 안전 모드. 변경사항 있으면 `-f` 없이 차단
 - **잠금 우선** — 잠긴 워크트리는 `remove`/`clean`에서 스킵
 - **머지 체크** — `clean`/`prune`/`remove`는 기준 브랜치에 patch-id(`git cherry`)로 머지가 확인된 것만 삭제 (`remove -f` 제외)
@@ -211,7 +211,7 @@ WT="$1"
 ### `cw add <folder>`
 1. 폴더명 정규화 + 브랜치명 결정 (인자 or `worktrees-<folder>`)
 2. 기존 브랜치 존재 확인 → 있으면 체크아웃 (base 인자 경고), 없으면 신규 생성
-3. `core.hooksPath /dev/null` 설정
+3. 해당 워크트리에만 `core.hooksPath /dev/null` 설정 (`extensions.worktreeConfig` 켬, 실패 시 경고 후 생략)
 4. `--lock` 시 즉시 잠금
 5. `~/.claude/worktree-init.sh` 실행
 6. `--no-open` 아니면 `cd` + `exec $CW_OPEN_CMD` (기본 `claude --dangerously-skip-permissions`)
