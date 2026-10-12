@@ -478,6 +478,36 @@ t_remove_unmerged_refused() {
   assert_dir_exists "$wp" "remove unmerged — 워크트리 잔존"
 }
 
+# 셋업: detached 워크트리에 기준(main)에 없는 커밋 1개
+_setup_detached_commit() {
+  local wp="$1/.claude/worktrees/dx"
+  cw_run "$1" add dx -d -n >/dev/null 2>&1
+  echo d > "$wp/d.txt"
+  git -C "$wp" add d.txt
+  git -C "$wp" commit -q -m "detached work"
+}
+
+# 회귀: detached는 브랜치가 없어 머지 판정 없이 지워져 커밋이 어떤 ref에서도 안 닿았음
+t_remove_detached_unmerged_refused() {
+  local r="$1" rc=0
+  _setup_detached_commit "$r"
+  cw_run "$r" remove dx >/dev/null 2>&1 || rc=$?
+  assert_exit 1 "$rc" "[회귀] remove detached 미포함 커밋 — exit 1"
+  assert_dir_exists "$r/.claude/worktrees/dx" "[회귀] remove detached 미포함 커밋 — 워크트리 유지"
+}
+
+t_remove_detached_force() {
+  local r="$1" rc=0
+  # 기준에 포함된 detached(커밋 없음)는 -f 없이 삭제
+  cw_run "$r" add d0 -d -n >/dev/null 2>&1
+  cw_run "$r" remove d0 >/dev/null 2>&1 || rc=$?
+  assert_exit 0 "$rc" "remove detached 기준 포함 — exit 0"
+  assert_dir_missing "$r/.claude/worktrees/d0" "remove detached 기준 포함 — 삭제"
+  _setup_detached_commit "$r"
+  cw_run "$r" remove dx -f >/dev/null 2>&1
+  assert_dir_missing "$r/.claude/worktrees/dx" "remove -f detached 미포함 커밋 — 삭제"
+}
+
 t_clean_merged_removed() {
   local r="$1"
   cw_run "$r" add cm1 -n >/dev/null 2>&1
@@ -895,6 +925,8 @@ run_test "remove .worktrees -f dirty"     t_remove_worktrees_dirty_force
 run_test "remove dirty 거부"            t_remove_dirty_refused
 run_test "remove -f dirty"              t_remove_dirty_force
 run_test "remove unmerged 거부"         t_remove_unmerged_refused
+run_test "[회귀] remove detached 미포함 거부" t_remove_detached_unmerged_refused
+run_test "remove detached -f"           t_remove_detached_force
 run_test "clean 머지된 워크트리"        t_clean_merged_removed
 run_test "clean 삭제 전 확인"           t_clean_confirm_prompt
 run_test "clean .worktrees 머지"          t_clean_worktrees_merged

@@ -877,6 +877,16 @@ cmd_remove() {
       # patch-equivalent(cherry-pick/rebase) 머지는 git branch -d가 거부 → 판정 통과 시 -D
       del_flag="-D"
     fi
+  elif [ "$opt_force" -eq 0 ]; then
+    # detached: 지우면 HEAD 커밋이 어떤 ref에서도 안 닿음 → clean과 같은 ancestor 판정
+    local base_br head_sha
+    base_br="$(merge_base_branch)"
+    head_sha="$(git -C "$wpath" rev-parse HEAD 2>/dev/null || true)"
+    if ! git merge-base --is-ancestor "$head_sha" "$base_br" 2>/dev/null; then
+      warn "detached HEAD 커밋 ${head_sha:0:10}이 기준(${C_CYAN}${base_br}${C_RESET})에 없음 — 워크트리 유지"
+      hint "강제 삭제하려면: ${C_CYAN}cw remove ${name} -f${C_RESET}"
+      exit 1
+    fi
   fi
 
   # dirty 체크 통과 후에는 --force 필수:
