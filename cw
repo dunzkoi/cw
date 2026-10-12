@@ -72,7 +72,8 @@ ${C_BOLD}Commands:${C_RESET}
   ${C_CYAN}cursor${C_RESET} <name>                  Cursor에서 워크트리 열기
   ${C_CYAN}name${C_RESET} <name>                    워크트리 이름 출력 + 클립보드 복사
   ${C_CYAN}remove${C_RESET} <name> [-f|--force]     특정 워크트리 삭제 (브랜치 포함)
-  ${C_CYAN}clean${C_RESET} [base] [-y|--yes]         머지된 워크트리 일괄 정리 (삭제 전 확인, -y로 생략)
+  ${C_CYAN}clean${C_RESET} [base] [-y|--yes] [-F|--fetch]
+                                  머지된 워크트리 일괄 정리 (삭제 전 확인, -y로 생략, -F: fetch 후 origin/<기준>으로 판정)
   ${C_CYAN}lock${C_RESET} <name> [reason]           워크트리 잠금 (삭제 방지)
   ${C_CYAN}unlock${C_RESET} <name>                   워크트리 잠금 해제
   ${C_CYAN}move${C_RESET} <name> <new-name>          워크트리 이름 변경
@@ -920,20 +921,31 @@ cmd_clean() {
   fi
   set -- "${args[@]+"${args[@]}"}"
 
-  local opt_yes=0
+  local opt_yes=0 opt_fetch=0
   local -a positional=()
   while [ $# -gt 0 ]; do
     case "$1" in
-      -y|--yes) opt_yes=1; shift ;;
-      --)       shift; break ;;
-      -*)       err "알 수 없는 옵션: $1"; exit 1 ;;
-      *)        positional+=("$1"); shift ;;
+      -y|--yes)   opt_yes=1; shift ;;
+      -F|--fetch) opt_fetch=1; shift ;;
+      --)         shift; break ;;
+      -*)         err "알 수 없는 옵션: $1"; exit 1 ;;
+      *)          positional+=("$1"); shift ;;
     esac
   done
 
   local default_br base wbase
   default_br="${positional[0]:-$(merge_base_branch)}"
   if [ -z "$default_br" ]; then err "기준 브랜치 감지 실패 (명시: cw clean <base>)"; exit 1; fi
+
+  # -F: 원격에서 머지된 PR을 로컬 기준 pull 없이 잡도록 origin/<기준>으로 판정 (기준 명시 시 그대로)
+  if [ "$opt_fetch" -eq 1 ]; then
+    info "origin fetch 중..."
+    if ! git fetch origin --prune 2>/dev/null; then
+      warn "fetch 실패 — 로컬 기준으로 계속"
+    elif [ ${#positional[@]} -eq 0 ] && git show-ref --verify --quiet "refs/remotes/origin/${default_br}"; then
+      default_br="origin/${default_br}"
+    fi
+  fi
 
   info "기준 브랜치: ${C_CYAN}${default_br}${C_RESET}"
   echo ""

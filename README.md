@@ -144,6 +144,7 @@ cw remove my-feature -f          # 강제 (변경사항 무시)
 cw clean                         # 메인 워크트리 현재 브랜치에 머지된 것만 일괄 삭제 (목록 확인 후 [y/N])
 cw clean main                    # 기준 브랜치 명시 override
 cw clean -y                      # 확인 생략하고 바로 삭제 (스크립트용)
+cw clean -F                      # origin fetch 후 origin/<기준>으로 판정 (GitHub에서 머지한 PR을 로컬 main pull 없이 정리)
 ```
 
 `-y` 없이 stdin이 없으면(cron, 파이프 등) 목록만 보여 주고 삭제하지 않습니다.
@@ -168,7 +169,7 @@ cw repair                        # 레포 이동 후 워크트리 링크 복구
 |---|---|---|---|
 | `-l` | `--lock` | add | 생성 즉시 잠금 |
 | `-d` | `--detach` | add | detached HEAD 체크아웃 |
-| `-F` | `--fetch` | add | 생성 전 `git fetch origin` |
+| `-F` | `--fetch` | add, clean | add: 생성 전 `git fetch origin` / clean: `git fetch origin --prune` 후 `origin/<기준>`으로 판정 (기준 명시 시 그대로, fetch 실패 시 로컬 기준) |
 | `-n` | `--no-open` | add | claude 실행 생략 |
 | `-f` | `--force` | remove | 더티 상태 무시 |
 | `-y` | `--yes` | clean | 삭제 전 확인 생략 |
@@ -217,7 +218,7 @@ WT="$1"
 6. `--no-open` 아니면 `cd` + `exec $CW_OPEN_CMD` (기본 `claude --dangerously-skip-permissions`)
 
 ### `cw clean`
-1. 메인 워크트리의 현재 브랜치를 기준으로 선정 (override: `cw clean <base>`)
+1. 메인 워크트리의 현재 브랜치를 기준으로 선정 (override: `cw clean <base>`, `-F`면 fetch 후 `origin/<기준>`)
 2. 각 워크트리 검사 (이 단계에서는 아무것도 지우지 않음):
    - 관리 베이스의 stray 디렉토리, prunable → 삭제 후보
    - 잠금 → 스킵

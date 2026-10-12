@@ -706,6 +706,27 @@ t_clean_detached_dirty_kept() {
     "[회귀] clean — detached + dirty 보존"
 }
 
+# 원격 main에만 머지(GitHub PR 머지 후 로컬 main 미 pull): clean은 유지, clean -F는 origin/main 기준으로 삭제
+t_clean_fetch_remote_merged() {
+  local r="$1" bare="$1/.remote.git" wp="$1/.claude/worktrees/rf" rc=0
+  git init -q --bare "$bare"
+  git -C "$r" remote add origin "$bare"
+  git -C "$r" push -q origin main
+  cw_run "$r" add rf -n >/dev/null 2>&1
+  echo rf > "$wp/rf.txt"
+  git -C "$wp" add rf.txt
+  git -C "$wp" commit -q -m "rf"
+  git -C "$r" push -q origin worktrees-rf
+  # 원격에서 PR 머지 (로컬 origin/main은 그대로)
+  git -C "$bare" update-ref refs/heads/main refs/heads/worktrees-rf
+  cw_run "$r" clean -y >/dev/null 2>&1
+  assert_dir_exists "$wp" "clean — 원격에만 머지된 워크트리 유지 (로컬 기준)"
+  cw_run "$r" clean -F -y >/dev/null 2>&1 || rc=$?
+  assert_exit 0 "$rc" "clean -F — exit 0"
+  assert_dir_missing "$wp" "clean -F — origin/main 기준으로 삭제"
+  assert_branch_missing "$r" "worktrees-rf" "clean -F — 브랜치 삭제"
+}
+
 # 회귀: 방금 만든 detached(HEAD reflog≤1)는 기준 ancestor여도 유지, 커밋 후 머지된 detached는 삭제
 t_clean_detached_untouched_kept() {
   local r="$1" wp2="$1/.claude/worktrees/d2"
@@ -994,6 +1015,7 @@ run_test "remove/prune squash 머지"     t_remove_prune_squash_merged
 run_test "[회귀] clean detached dirty"  t_clean_detached_dirty_kept
 run_test "[회귀] clean detached 미작업" t_clean_detached_untouched_kept
 run_test "clean 머지 안 된 보존"        t_clean_unmerged_kept
+run_test "clean -F 원격 기준"           t_clean_fetch_remote_merged
 run_test "[회귀] clean 중첩 보존"       t_clean_nested_unmerged_preserved
 run_test "clean 중첩 머지된 삭제"       t_clean_nested_merged_removed
 run_test "clean stray 디렉토리"         t_clean_stray_dir
