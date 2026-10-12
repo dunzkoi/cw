@@ -348,12 +348,17 @@ cmd_add() {
 
   mkdir -p "${REPO_ROOT}/${DEFAULT_WORKTREE_BASE}"
 
-  # hooksPath를 새 워크트리에만 쓰려면 worktreeConfig 필요 — 없이 쓰면 공유 .git/config라 메인 hook까지 꺼짐
-  local worktree_config=1
-  git config extensions.worktreeConfig true 2>/dev/null || {
-    worktree_config=0
-    warn "extensions.worktreeConfig 설정 실패 — hooksPath 차단 생략"
-  }
+  # hooksPath를 새 워크트리에만 쓰려면 worktreeConfig 필요 — 없이 쓰면 공유 .git/config라 메인 hook까지 꺼짐.
+  # 공유 config의 core.bare=true·core.worktree는 worktreeConfig를 켜면 모든 링크 워크트리에 적용돼 깨짐 → 그땐 안 켬
+  local worktree_config=0 common_cfg
+  common_cfg="$(git rev-parse --git-common-dir)/config"
+  if [ "$(git config -f "$common_cfg" --bool core.bare 2>/dev/null)" != "true" ] \
+    && ! git config -f "$common_cfg" core.worktree >/dev/null 2>&1 \
+    && git config extensions.worktreeConfig true 2>/dev/null; then
+    worktree_config=1
+  else
+    warn "extensions.worktreeConfig를 켤 수 없음 (bare 레포 등) — hooksPath 차단 생략"
+  fi
 
   info "워크트리 생성: ${C_BOLD}${wpath}${C_RESET}"
 

@@ -223,7 +223,7 @@ WT="$1"
 ### `cw add <folder>`
 1. 폴더명 정규화 + 브랜치명 결정 (인자 or `worktrees-<folder>`)
 2. 기존 브랜치 존재 확인 → 있으면 체크아웃 (base 인자 경고), 없으면 신규 생성
-3. 해당 워크트리에만 `core.hooksPath /dev/null` 설정 (`extensions.worktreeConfig` 켬, 실패 시 경고 후 생략)
+3. 해당 워크트리에만 `core.hooksPath /dev/null` 설정 (`extensions.worktreeConfig` 켬. bare 레포 등 켤 수 없으면 경고 후 생략)
 4. `--lock` 시 즉시 잠금
 5. `.worktreeinclude`에 맞는 gitignore 파일 복사
 6. `~/.claude/worktree-init.sh` 실행

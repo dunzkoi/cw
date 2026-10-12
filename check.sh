@@ -227,6 +227,16 @@ _setup_worktreeinclude() {
   printf '.env\nconfig/secret.json\nREADME\n' > "$r/.worktreeinclude"
 }
 
+# 회귀: bare 레포(core.bare=true)에서 worktreeConfig를 켜면 모든 링크 워크트리가 bare로 인식돼 깨짐
+t_add_bare_repo_worktree_usable() {
+  local bare="$1/r.git" out
+  git clone -q --bare "$1" "$bare"
+  (cd "$bare" && cw_run "$1" add bw -n >/dev/null 2>&1)
+  out="$(git -C "$bare/.claude/worktrees/bw" rev-parse --is-inside-work-tree 2>&1)"
+  assert_eq "$out" "true" "[회귀] bare 레포 add — 새 워크트리가 작업 트리로 동작"
+  assert_eq "$(git -C "$bare" config extensions.worktreeConfig)" "" "[회귀] bare 레포 add — worktreeConfig 안 켬"
+}
+
 # .worktreeinclude: 목록에 맞고 gitignore된 파일만 새 워크트리로 복사 (claude -w 호환)
 t_add_worktreeinclude() {
   local r="$1" wp="$1/.claude/worktrees/inc"
@@ -1020,6 +1030,7 @@ run_test "add 중첩 경로"                t_add_nested
 run_test "add detached HEAD"            t_add_detached
 run_test "add lock 옵션"                t_add_locked
 run_test "[회귀] add hooksPath 워크트리 한정" t_add_hookspath_worktree_only
+run_test "[회귀] add bare 레포"         t_add_bare_repo_worktree_usable
 run_test "add .worktreeinclude 복사"    t_add_worktreeinclude
 run_test "[보안] .worktreeinclude 심링크" t_add_worktreeinclude_symlink
 run_test "add -n 경로 출력"             t_add_no_open_outputs_path
