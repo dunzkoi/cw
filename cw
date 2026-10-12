@@ -247,6 +247,8 @@ is_effectively_merged() {
   out="$(git cherry "$base" "$branch" 2>/dev/null)" || return 1
   grep -q '^+' <<< "$out" || return 0
   mb="$(git merge-base "$base" "$branch" 2>/dev/null)" || return 1
+  # 순 diff 0(커밋+revert 등)이면 임시 commit이 빈 commit → 기준의 아무 빈 commit과 매치되므로 머지 안 됨
+  [ "$(git rev-parse "${branch}^{tree}" 2>/dev/null)" != "$(git rev-parse "${mb}^{tree}" 2>/dev/null)" ] || return 1
   # 서명·사용자 설정에 막히지 않게 고정 ident + 서명 끔
   tmp="$(git -c user.name=cw -c user.email=cw@localhost commit-tree --no-gpg-sign \
     "${branch}^{tree}" -p "$mb" -m "cw squash check" 2>/dev/null)" || return 1

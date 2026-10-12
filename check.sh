@@ -735,6 +735,20 @@ t_clean_squash_merged() {
   assert_branch_exists "$r" "worktrees-sqp" "clean — 일부만 squash 머지된 브랜치 유지"
 }
 
+# 회귀: 커밋+revert(순 diff 0) 브랜치의 임시 commit이 main의 빈 commit(CI 트리거 등)과 매치돼 머지로 오판됐음
+t_remove_net_zero_kept() {
+  local r="$1" rc=0 wp="$1/.claude/worktrees/nz"
+  cw_run "$r" add nz -n >/dev/null 2>&1
+  echo z > "$wp/z.txt"
+  git -C "$wp" add z.txt
+  git -C "$wp" commit -q -m "z"
+  git -C "$wp" revert --no-edit HEAD >/dev/null 2>&1
+  git -C "$r" commit -q --allow-empty -m "ci: trigger"
+  cw_run "$r" remove nz >/dev/null 2>&1 || rc=$?
+  assert_exit 1 "$rc" "[회귀] remove 순 diff 0 브랜치 — exit 1"
+  assert_branch_exists "$r" "worktrees-nz" "[회귀] remove 순 diff 0 브랜치 — 브랜치 유지"
+}
+
 t_remove_prune_squash_merged() {
   local r="$1" rc=0
   _setup_squash "$r" sqr worktrees-sqr
@@ -1066,6 +1080,7 @@ run_test "[회귀] clean patch+빈reflog"  t_clean_patch_merged_empty_reflog
 run_test "[회귀] clean rebase 머지"     t_clean_rebase_merged_removed
 run_test "clean squash 머지"            t_clean_squash_merged
 run_test "remove/prune squash 머지"     t_remove_prune_squash_merged
+run_test "[회귀] remove 순 diff 0 유지"  t_remove_net_zero_kept
 run_test "[회귀] clean detached dirty"  t_clean_detached_dirty_kept
 run_test "[회귀] clean detached 미작업" t_clean_detached_untouched_kept
 run_test "clean 머지 안 된 보존"        t_clean_unmerged_kept
