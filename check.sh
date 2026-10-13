@@ -872,6 +872,22 @@ t_clean_prunable() {
   else fail "clean prunable — 메타데이터 잔존 (before=$before, after=$after)"; fi
 }
 
+# 회귀: 관리 베이스 밖 prunable(.git 파일만 잃은 orca 등)을 사용자 파일째 rm -rf 했음 — 메타데이터만 정리
+t_clean_external_prunable_kept() {
+  local r="$1" ext wp
+  ext="$(mktemp -d -t cw-ext.XXXXXX)"
+  ext="$(cd "$ext" && pwd -P)"
+  wp="$ext/orca"
+  git -C "$r" worktree add "$wp" -b orca main -q
+  rm -f "$wp/.git"
+  echo note > "$wp/notes.txt"
+  cw_run "$r" clean -y >/dev/null 2>&1
+  assert_dir_exists "$wp" "[회귀] clean — 외부 prunable 디렉토리 유지"
+  assert_eq "$(cat "$wp/notes.txt" 2>/dev/null)" "note" "[회귀] clean — 외부 prunable 사용자 파일 유지"
+  assert_not_contains "$(git -C "$r" worktree list --porcelain)" "$wp" "clean — 외부 prunable 메타데이터 정리"
+  rm -rf "$ext"
+}
+
 t_clean_mixed() {
   local r="$1"
   # 진짜 머지된 워크트리 (commit + ff merge)
@@ -1111,6 +1127,7 @@ run_test "[회귀] clean 중첩 보존"       t_clean_nested_unmerged_preserved
 run_test "clean 중첩 머지된 삭제"       t_clean_nested_merged_removed
 run_test "clean stray 디렉토리"         t_clean_stray_dir
 run_test "clean prunable"               t_clean_prunable
+run_test "[회귀] clean 외부 prunable 보존" t_clean_external_prunable_kept
 run_test "clean 혼합 시나리오"          t_clean_mixed
 run_test "prune"                        t_prune
 run_test "[회귀] prune 접두 이름 미머지" t_prune_prefix_unmerged_kept

@@ -156,7 +156,7 @@ cw clean -F                      # origin fetch 후 origin/<기준>으로 판정
 - tip==기준 tip + reflog>1 → ff-merge로 삭제
 - 잠긴·dirty·머지 안 됨 → 스킵 (끝에 `cw remove <name> -f` 힌트)
 - detached HEAD → HEAD가 기준 브랜치 ancestor면 삭제. dirty거나 워크트리 HEAD reflog≤1(방금 만든 미작업)이면 유지
-- stray 디렉토리 삭제는 관리 베이스(`.claude/worktrees`, `.worktrees`) 안에서만
+- stray·prunable 디렉토리 삭제는 관리 베이스(`.claude/worktrees`, `.worktrees`) 안에서만. 밖의 prunable(orca 등)은 디렉토리를 두고 git 메타데이터만 정리
 
 ```bash
 cw prune                         # stale 참조 정리 + 머지된 orphan 브랜치 삭제
@@ -233,7 +233,7 @@ WT="$1"
 ### `cw clean`
 1. 메인 워크트리의 현재 브랜치를 기준으로 선정 (override: `cw clean <base>`, `-F`면 fetch 후 `origin/<기준>`)
 2. 각 워크트리 검사 (이 단계에서는 아무것도 지우지 않음):
-   - 관리 베이스의 stray 디렉토리, prunable → 삭제 후보
+   - 관리 베이스의 stray 디렉토리, prunable → 삭제 후보 (밖의 prunable은 유지, 메타데이터만 정리)
    - 잠금 → 스킵
    - detached HEAD → `merge-base --is-ancestor` 체크 (dirty거나 HEAD reflog≤1이면 유지)
    - 일반 브랜치 → `git cherry <base> <branch>`(patch-id)로 머지 판정(squash 머지는 브랜치 전체 diff로 재확인). dirty면 유지, tip이 기준 ancestor이고 reflog≤1이면 유지

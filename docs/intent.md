@@ -12,7 +12,7 @@
 - `cw clean`은 uncommitted 변경이 있으면 삭제 금지
 - `clean`·`remove`·`prune`은 기본 브랜치(`repo_default_branch`)와 판정 기준 브랜치를 지우지 않음 — 기준이 develop이면 main도 "머지됨"으로 보이므로 `is_protected_branch`로 먼저 거름
 - 중첩 경로(`fix/ceoapp`)의 부모 디렉토리를 stray로 오판해 `rm -rf` 하지 않기
-- stray `rm`은 관리 베이스(`.claude/worktrees`, `.worktrees`) 안에서만 — orca 등 외부는 git 등록분만
+- stray·prunable `rm`은 관리 베이스(`.claude/worktrees`, `.worktrees`) 안에서만 — orca 등 외부는 git 등록분만, 외부 prunable은 메타데이터만 정리
 - 테스트(`check.sh`) 회귀가 통과한 뒤에만 릴리즈/커밋 훅 통과
 - PR·main push는 `.github/workflows/check.yml`(macOS bash 3.2 · Ubuntu)에서 `shellcheck -S warning` + `check.sh` 통과
 

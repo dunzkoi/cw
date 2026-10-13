@@ -1070,9 +1070,15 @@ cmd_clean() {
 
     # prunable: git 내부 메타데이터는 살아있지만 워크트리 .git 파일이 사라진 상태
     # → 디렉토리 정리하고 git worktree prune이 메타데이터 정리하게 둠
+    # 관리 베이스 밖(orca 등)은 git이 워크트리로 못 알아보는 사용자 디렉토리 → rm 없이 메타데이터만
     if [ "$prunable" = "1" ]; then
       [ "$is_tty" -eq 1 ] && printf '\r\033[K'
-      plan+=("rm|${wtpath}||${name}|prunable (git 등록 메타데이터만 잔존)")
+      if is_managed_worktree_path "$wtpath"; then
+        plan+=("rm|${wtpath}||${name}|prunable (git 등록 메타데이터만 잔존)")
+      else
+        skip "${prefix} 유지: ${name} — 관리 베이스 밖 prunable, git 메타데이터만 정리"
+        skipped=$((skipped + 1))
+      fi
       continue
     fi
 
