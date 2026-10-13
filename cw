@@ -138,6 +138,13 @@ is_managed_worktree_path() {
   return 1
 }
 
+# add/move 이름 검증: 빈 이름·절대 경로·./.. 조각은 관리 베이스 밖(또는 베이스 자체)을 가리킴
+valid_worktree_name() {
+  case "/$1/" in
+    //*|*/../*|*/./*) return 1 ;;
+  esac
+}
+
 # 관리 베이스 기준 상대 이름 (예: BMSQUARE-15764, fix/ceoapp)
 worktree_relative_name() {
   local path="$1" base fullbase
@@ -331,6 +338,7 @@ cmd_add() {
   require_repo
 
   local name="${positional[0]}"
+  valid_worktree_name "$name" || { err "잘못된 이름: '${name}' (빈 이름·절대 경로·./.. 불가)"; exit 1; }
   local branch_arg="${positional[1]:-}"
   local base_arg="${positional[2]:-}"
 
@@ -726,11 +734,9 @@ cmd_list_interactive() {
   tty_raw_off
 }
 
+# require_repo 이후 호출 전제 — 메인은 REPO_ROOT (show-toplevel은 linked 안에서 그 워크트리를 가리킴)
 cmd_list_plain() {
-  local main_path
-  main_path="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-
-  git worktree list --porcelain 2>/dev/null | awk -v main="$main_path" -v home="$HOME" \
+  git worktree list --porcelain 2>/dev/null | awk -v main="$REPO_ROOT" -v home="$HOME" \
     -v cB="$C_BOLD" -v cD="$C_DIM" -v cG="$C_GRAY" -v cC="$C_CYAN" \
     -v cY="$C_YELLOW" -v cR="$C_RED" -v cGr="$C_GREEN" -v cRs="$C_RESET" '
     function tilde(p,    hl) {
@@ -795,8 +801,8 @@ cmd_list() {
       *) err "Usage: cw list [--plain|-p]"; exit 1 ;;
     esac
   done
+  require_repo
   if [ "$opt_plain" -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
-    require_repo
     cmd_list_interactive
     return
   fi
@@ -1261,8 +1267,9 @@ cmd_lock() {
   if [ $# -lt 1 ]; then err "Usage: cw lock <name> [reason]"; exit 1; fi
   require_repo
 
-  local name="$1"
-  local reason="${2:-}"
+  local name="$1" reason
+  # 따옴표 없이 쓴 여러 단어 사유도 그대로 (전역 IFS는 \n\t라 공백으로 다시 이음)
+  reason="$(IFS=' '; printf '%s' "${*:2}")"
   require_worktree "$name" || exit 1
 
   if [ -n "$reason" ]; then
@@ -1286,6 +1293,7 @@ cmd_move() {
   require_repo
 
   local name="$1" newname="$2"
+  valid_worktree_name "$newname" || { err "잘못된 이름: '${newname}' (빈 이름·절대 경로·./.. 불가)"; exit 1; }
   require_worktree "$name" || exit 1
   if [ -z "$RESOLVED_BASE" ] || ! is_managed_worktree_path "$RESOLVED_PATH"; then
     err "관리 베이스(${WORKTREE_BASES[*]}) 밖 워크트리는 move 불가"

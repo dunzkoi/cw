@@ -291,6 +291,19 @@ t_list() {
   assert_contains "$out" ".claude/worktrees/b" "list — b 포함"
 }
 
+# 회귀: list --plain이 현재 워크트리를 메인으로 표시했고, 레포 밖에서는 메시지 없이 rc=128
+t_list_plain_main_from_linked() {
+  local r="$1" out rc=0 outside
+  cw_run "$r" add a -n >/dev/null 2>&1
+  out="$(cd "$r/.claude/worktrees/a" && cw_run "$r" list --plain 2>&1 | head -1)"
+  assert_eq "${out%%  *}" "~" "list --plain — linked 안에서도 첫 줄이 메인 경로"
+  outside="$(mktemp -d -t cw-out.XXXXXX)"
+  out="$(cd "$outside" && cw_run "$r" list --plain 2>&1)" || rc=$?
+  assert_exit 1 "$rc" "[회귀] list --plain 레포 밖 — exit 1"
+  assert_contains "$out" "git repo 아님" "[회귀] list --plain 레포 밖 — 에러 메시지"
+  rmdir "$outside"
+}
+
 t_path_worktrees_base() {
   local r="$1"
   mkdir -p "$r/.worktrees"
@@ -442,6 +455,32 @@ t_lock_unlock() {
   cw_run "$r" unlock x >/dev/null 2>&1
   if [ ! -f "$lf" ]; then pass "unlock — locked 마커 제거"
   else fail "unlock — locked 마커 잔존"; fi
+}
+
+# 회귀: 따옴표 없이 쓴 여러 단어 사유가 첫 단어만 저장됐음
+t_lock_multiword_reason() {
+  local r="$1" lf
+  cw_run "$r" add a -n >/dev/null 2>&1
+  cw_run "$r" lock a MR 리뷰 중 >/dev/null 2>&1
+  lf="$(git -C "$r" rev-parse --git-common-dir)/worktrees/a/locked"
+  assert_eq "$(cat "$lf" 2>/dev/null)" "MR 리뷰 중" "[회귀] lock — 여러 단어 사유 전체 저장"
+}
+
+# 회귀: 이름에 ..·절대 경로가 들어가면 관리 베이스 밖에 워크트리를 만들었음
+t_add_name_escape_refused() {
+  local r="$1" rc name
+  for name in ../evil /tmp/evil "" a/../../evil .; do
+    rc=0
+    cw_run "$r" add "$name" feat-evil -n >/dev/null 2>&1 || rc=$?
+    assert_exit 1 "$rc" "[회귀] add '${name}' — 거부"
+  done
+  assert_dir_missing "$r/.claude/evil" "[회귀] add ../evil — 관리 베이스 밖에 안 만듦"
+  assert_branch_missing "$r" "feat-evil" "add 이름 거부 — 브랜치도 안 만듦"
+  cw_run "$r" add ok -n >/dev/null 2>&1
+  rc=0
+  cw_run "$r" move ok ../moved >/dev/null 2>&1 || rc=$?
+  assert_exit 1 "$rc" "[회귀] move ../moved — 거부"
+  assert_dir_missing "$r/.claude/moved" "[회귀] move ../moved — 관리 베이스 밖으로 안 옮김"
 }
 
 t_lock_blocks_remove() {
@@ -1099,6 +1138,9 @@ run_test "[보안] .worktreeinclude 심링크" t_add_worktreeinclude_symlink
 run_test "add -n 경로 출력"             t_add_no_open_outputs_path
 run_test "[회귀] add .worktrees 기존"   t_add_existing_dot_worktrees
 run_test "list"                         t_list
+run_test "[회귀] list --plain 메인 표시" t_list_plain_main_from_linked
+run_test "[회귀] lock 여러 단어 사유"   t_lock_multiword_reason
+run_test "[회귀] add·move 이름 탈출 거부" t_add_name_escape_refused
 run_test "path .worktrees 베이스"       t_path_worktrees_base
 run_test "name + 클립보드"              t_name_worktrees_base
 run_test "path"                         t_path
