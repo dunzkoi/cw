@@ -215,6 +215,7 @@ WT="$1"
 - **자동 hooksPath 차단** — 새 워크트리에만 `core.hooksPath=/dev/null` 적용 (`extensions.worktreeConfig` + `git config --worktree`). 메인 레포·다른 워크트리의 husky 등 hook은 그대로
 - **dirty 보호** — `cw remove`는 기본 안전 모드. 변경사항 있으면 `-f` 없이 차단
 - **잠금 우선** — 잠긴 워크트리는 `remove`/`clean`에서 스킵
+- **기본 브랜치 보호** — 기본 브랜치(main 등)와 기준 브랜치는 머지 판정과 무관하게 지우지 않음. `clean`은 그 브랜치가 체크아웃된 워크트리를 유지하고, `remove`는 워크트리만 지움
 - **머지 체크** — `clean`/`prune`/`remove`는 기준 브랜치에 patch-id(`git cherry`)로 머지가 확인된 것만 삭제. detached HEAD는 HEAD가 기준의 ancestor일 때만 (`remove -f` 제외)
 - **TTY 감지** — 파이프/리다이렉트 시 색상 + 클립보드 복사 자동 비활성
 

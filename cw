@@ -293,6 +293,14 @@ merge_base_branch() {
   repo_default_branch
 }
 
+# 기본 브랜치·판정 기준 브랜치는 머지 판정과 무관하게 지우지 않음
+# (기준이 develop이면 그 조상인 main도 "머지됨"으로 판정됨)
+is_protected_branch() {
+  local br="$1" base="${2:-}"
+  [ -n "$br" ] || return 1
+  [ "$br" = "${base#origin/}" ] || [ "$br" = "$(repo_default_branch)" ]
+}
+
 cmd_add() {
   local -a positional=()
   local opt_lock=0 opt_detach=0 opt_fetch=0 opt_no_open=0
@@ -900,12 +908,14 @@ cmd_remove() {
   fi
 
   # 머지 여부 선검증 (clean과 같은 patch-id 판정): 워크트리 제거 후 브랜치 삭제만 실패하는 반쪽 상태 방지
-  local del_flag="-d"
+  local del_flag="-d" base_br protected=0
   [ "$opt_force" -eq 1 ] && del_flag="-D"
-  if [ -n "$branch" ] && [ "$opt_force" -eq 0 ]; then
-    local base_br
-    base_br="$(merge_base_branch)"
-    if [ -n "$base_br" ] && [ "$base_br" != "$branch" ]; then
+  base_br="$(merge_base_branch)"
+  if is_protected_branch "$branch" "$base_br"; then
+    # 브랜치를 지우지 않으므로 커밋 손실 없음 → 머지 판정 생략
+    protected=1
+  elif [ -n "$branch" ] && [ "$opt_force" -eq 0 ]; then
+    if [ -n "$base_br" ]; then
       if ! is_effectively_merged "$branch" "$base_br"; then
         warn "브랜치 ${C_CYAN}${branch}${C_RESET} 머지 안 됨 (${C_CYAN}${base_br}${C_RESET} 기준) — 워크트리 유지"
         hint "강제 삭제하려면: ${C_CYAN}cw remove ${name} -f${C_RESET}"
@@ -916,8 +926,7 @@ cmd_remove() {
     fi
   elif [ "$opt_force" -eq 0 ]; then
     # detached: 지우면 HEAD 커밋이 어떤 ref에서도 안 닿음 → clean과 같은 ancestor 판정
-    local base_br head_sha
-    base_br="$(merge_base_branch)"
+    local head_sha
     head_sha="$(git -C "$wpath" rev-parse HEAD 2>/dev/null || true)"
     if ! git merge-base --is-ancestor "$head_sha" "$base_br" 2>/dev/null; then
       warn "detached HEAD 커밋 ${head_sha:0:10}이 기준(${C_CYAN}${base_br}${C_RESET})에 없음 — 워크트리 유지"
@@ -933,7 +942,9 @@ cmd_remove() {
   # 디렉토리 잔존 대비 (turbo daemon 등 외부 프로세스가 파일 재생성하는 경우)
   [ -d "$wpath" ] && rm -rf "$wpath"
 
-  if [ -n "$branch" ]; then
+  if [ "$protected" -eq 1 ]; then
+    info "브랜치 유지: 기본 브랜치 ${C_CYAN}${branch}${C_RESET}"
+  elif [ -n "$branch" ]; then
     git branch "$del_flag" "$branch" 2>/dev/null || warn "브랜치 ${C_CYAN}${branch}${C_RESET} 삭제 실패. ${C_CYAN}git branch -D ${branch}${C_RESET}로 강제 삭제 가능"
   fi
 
@@ -1114,6 +1125,12 @@ cmd_clean() {
     #   C) tip==기준 tip + reflog≤1 → 방금 생성 미작업 → 유지
     #   D) tip==기준 tip + reflog>1 → 방금 ff-merge → 삭제
     #   E) tip이 ancestor 아님 + cherry0 → patch-equivalent·squash 머지(15764) → 삭제 (빈 reflog여도)
+    if is_protected_branch "$branch" "$default_br"; then
+      [ "$is_tty" -eq 1 ] && printf '\r\033[K'
+      skip "${prefix} 유지: ${name} (${branch}) — 기본 브랜치 체크아웃"
+      skipped=$((skipped + 1))
+      continue
+    fi
     if is_effectively_merged "$branch" "$default_br"; then
       local dirty
       dirty="$(worktree_dirty "$wtpath")"
@@ -1301,7 +1318,10 @@ cmd_prune() {
     [ -z "$br" ] && continue
     git show-ref --verify --quiet "refs/heads/${br}" || continue
 
-    if is_effectively_merged "$br" "$default_br"; then
+    if is_protected_branch "$br" "$default_br"; then
+      skip "브랜치 유지: ${br} — 기본 브랜치"
+      kept=$((kept + 1))
+    elif is_effectively_merged "$br" "$default_br"; then
       git branch -D "$br" 2>/dev/null && {
         ok "브랜치 삭제: ${C_BOLD}${br}${C_RESET} — ${default_br}에 머지됨"
         deleted=$((deleted + 1))

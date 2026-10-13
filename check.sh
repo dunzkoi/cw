@@ -1011,6 +1011,28 @@ t_clean_external_unmerged_kept() {
   rm -rf "$ext"
 }
 
+# 회귀: 메인 워크트리가 develop이면 main이 "develop에 머지됨"으로 보여 clean·remove·prune이 main 브랜치까지 지웠음
+t_protect_default_branch() {
+  local r="$1" wp="$1/.claude/worktrees/mw" out
+  echo b > "$r/b.txt" && git -C "$r" add b.txt && git -C "$r" commit -q -m b
+  git -C "$r" checkout -q -b develop
+  cw_run "$r" add mw main -n >/dev/null 2>&1
+  out="$(cw_run "$r" clean -y 2>&1)"
+  assert_dir_exists "$wp" "[회귀] clean — 기본 브랜치 워크트리 유지"
+  assert_branch_exists "$r" "main" "[회귀] clean — main 브랜치 유지"
+  assert_contains "$out" "기본 브랜치 체크아웃" "clean — 유지 사유 출력"
+  cw_run "$r" remove mw >/dev/null 2>&1
+  assert_dir_missing "$wp" "remove — 기본 브랜치 워크트리는 삭제"
+  assert_branch_exists "$r" "main" "[회귀] remove — main 브랜치 유지"
+  cw_run "$r" add mw main -n >/dev/null 2>&1
+  cw_run "$r" remove mw -f >/dev/null 2>&1
+  assert_branch_exists "$r" "main" "[회귀] remove -f — main 브랜치 유지"
+  cw_run "$r" add mw main -n >/dev/null 2>&1
+  rm -f "$wp/.git"
+  cw_run "$r" prune >/dev/null 2>&1
+  assert_branch_exists "$r" "main" "[회귀] prune — main 브랜치 유지"
+}
+
 # 공백 경로 레포 (iCloud Drive, Application Support 등): porcelain을 첫 단어에서 자르면 전부 실패
 t_space_in_repo_path() {
   local sp="$1/My Proj" wp out
@@ -1097,6 +1119,7 @@ run_test "remove cherry-pick 흡수"      t_remove_cherry_picked
 run_test "[회귀] 기준 브랜치 오타"      t_bad_base_keeps_unmerged
 run_test "clean 외부 경로 머지"         t_clean_external_merged
 run_test "clean/remove 외부 경로"       t_clean_external_unmerged_kept
+run_test "[회귀] 기본 브랜치 보호"      t_protect_default_branch
 run_test "공백 들어간 레포 경로"        t_space_in_repo_path
 
 echo ""
