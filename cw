@@ -164,20 +164,26 @@ worktree_label() {
   fi
 }
 
-# RESOLVED_PATH / RESOLVED_BASE 설정. 없으면 1.
-# 1) 관리 베이스 경로 우선  2) git worktree list 전역 basename/상대이름 매칭
-resolve_worktree_by_name() {
-  local name="$1" base wpath wtpath rel label
+# 관리 베이스에서만 이름 검색 (앞쪽 베이스 우선). RESOLVED_PATH / RESOLVED_BASE 설정. 없으면 1.
+resolve_managed_worktree() {
+  local name="$1" base
   RESOLVED_PATH=""
   RESOLVED_BASE=""
   for base in "${WORKTREE_BASES[@]}"; do
-    wpath="${REPO_ROOT}/${base}/${name}"
-    if [ -d "$wpath" ]; then
-      RESOLVED_PATH="$wpath"
+    if [ -d "${REPO_ROOT}/${base}/${name}" ]; then
+      RESOLVED_PATH="${REPO_ROOT}/${base}/${name}"
       RESOLVED_BASE="$base"
       return 0
     fi
   done
+  return 1
+}
+
+# RESOLVED_PATH / RESOLVED_BASE 설정. 없으면 1.
+# 1) 관리 베이스 경로 우선  2) git worktree list 전역 basename/상대이름 매칭
+resolve_worktree_by_name() {
+  local name="$1" wtpath rel label
+  resolve_managed_worktree "$name" && return 0
   # orca/workspaces 등 관리 베이스 밖 linked worktree
   while IFS= read -r wtpath; do
     [ -n "$wtpath" ] || continue
@@ -336,9 +342,11 @@ cmd_add() {
   branch="${branch_arg:-worktrees-${name}}"
   base="${base_arg:-$default_br}"
 
+  # 기존 워크트리는 관리 베이스 전체(.worktrees 포함)에서 찾고, 새로 만들 때만 DEFAULT_WORKTREE_BASE
   local wpath="${REPO_ROOT}/${DEFAULT_WORKTREE_BASE}/${name}"
 
-  if [ -d "$wpath" ]; then
+  if resolve_managed_worktree "$name"; then
+    wpath="$RESOLVED_PATH"
     info "이미 존재: ${C_DIM}${wpath}${C_RESET}"
     if [ "$opt_no_open" -eq 1 ]; then
       echo "$wpath"

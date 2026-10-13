@@ -111,7 +111,7 @@ eval "$(cw cd BMSQUARE-15764)"   # 현재 쉘에서 이동
 
 `cw`는 `.claude/worktrees/`와 `.worktrees/` 모두에서 워크트리를 찾습니다.  
 `remove`, `clean`, `lock`, `move` 등 관리 명령도 **양쪽 베이스 모두** 적용됩니다.  
-`cw add`로 새로 만드는 워크트리는 기본적으로 `.claude/worktrees/`에 생성됩니다.
+`cw add`로 새로 만드는 워크트리는 기본적으로 `.claude/worktrees/`에 생성됩니다. 같은 이름이 어느 베이스에든 이미 있으면 새로 만들지 않고 그 워크트리를 엽니다.
 
 ### 목록 출력 예
 ```bash

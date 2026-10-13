@@ -271,6 +271,16 @@ t_add_no_open_outputs_path() {
   assert_eq "$out" "$r/.claude/worktrees/no" "add -n — 마지막 줄 = 경로"
 }
 
+# 회귀: add가 .claude/worktrees만 확인해서 .worktrees/x가 있으면 같은 브랜치로 다시 만들다 실패했음
+t_add_existing_dot_worktrees() {
+  local r="$1" out rc=0
+  _add_worktree_at_base "$r" ".worktrees" "x"
+  out="$(cw_run "$r" add x -n 2>/dev/null)" || rc=$?
+  assert_exit 0 "$rc" "[회귀] add — .worktrees 기존 워크트리면 exit 0"
+  assert_eq "$(printf '%s' "$out" | tail -1)" "$r/.worktrees/x" "[회귀] add -n — .worktrees 경로 출력"
+  assert_dir_missing "$r/.claude/worktrees/x" "add — .claude/worktrees에 새로 만들지 않음"
+}
+
 t_list() {
   local r="$1"
   cw_run "$r" add a -n >/dev/null 2>&1
@@ -445,16 +455,17 @@ t_lock_blocks_remove() {
   assert_dir_exists "$r/.claude/worktrees/lkr" "lock — 워크트리 잔존"
 }
 
-# 셋업: 같은 이름 x가 두 베이스에 존재 → admin 디렉토리 .worktrees/x=x, .claude/worktrees/x=x1
+# 셋업: 같은 이름 x가 두 베이스에 존재 → admin 디렉토리 .claude/worktrees/x=x, .worktrees/x=x1
+# (cw add x는 .worktrees/x가 있으면 그걸 열므로 .claude 쪽을 먼저 만든다)
 # 둘 다 커밋 후 ff-merge (잠금만 없으면 clean 삭제 대상)
 _setup_same_name_bases() {
   local r="$1" a="$1/.worktrees/x" b="$1/.claude/worktrees/x"
-  _add_worktree_at_base "$r" ".worktrees" "x" "wx"
-  echo a > "$a/a.txt" && git -C "$a" add a.txt && git -C "$a" commit -q -m a
-  git -C "$r" merge --ff-only wx -q
   cw_run "$r" add x -n >/dev/null 2>&1
   echo b > "$b/b.txt" && git -C "$b" add b.txt && git -C "$b" commit -q -m b
   git -C "$r" merge --ff-only worktrees-x -q
+  _add_worktree_at_base "$r" ".worktrees" "x" "wx"
+  echo a > "$a/a.txt" && git -C "$a" add a.txt && git -C "$a" commit -q -m a
+  git -C "$r" merge --ff-only wx -q
 }
 
 # 잠금 판정이 basename(worktrees/x/locked)을 보면 엉뚱한 워크트리의 잠금을 읽음
@@ -1086,6 +1097,7 @@ run_test "[회귀] add bare 레포"         t_add_bare_repo_worktree_usable
 run_test "add .worktreeinclude 복사"    t_add_worktreeinclude
 run_test "[보안] .worktreeinclude 심링크" t_add_worktreeinclude_symlink
 run_test "add -n 경로 출력"             t_add_no_open_outputs_path
+run_test "[회귀] add .worktrees 기존"   t_add_existing_dot_worktrees
 run_test "list"                         t_list
 run_test "path .worktrees 베이스"       t_path_worktrees_base
 run_test "name + 클립보드"              t_name_worktrees_base
