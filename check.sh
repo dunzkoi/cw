@@ -430,6 +430,73 @@ t_open_cmd_args() {
   assert_exit 1 "$rc" "open — -- 없는 추가 인자는 거부"
 }
 
+# cw pr <N>: origin의 refs/pull/<N>/head(GitHub PR 참조)를 pr-<N> 브랜치 워크트리로
+t_pr_worktree() {
+  local r="$1" bare="$1/.remote.git" wp="$1/.claude/worktrees/pr-7" sha out rc=0
+  git init -q --bare "$bare"
+  git -C "$r" remote add origin "$bare"
+  git -C "$r" checkout -q -b topic
+  echo p > "$r/p.txt" && git -C "$r" add p.txt && git -C "$r" commit -q -m pr
+  sha="$(git -C "$r" rev-parse HEAD)"
+  git -C "$r" push -q origin HEAD:refs/pull/7/head
+  git -C "$r" checkout -q main
+  git -C "$r" branch -q -D topic
+  out="$(cw_run "$r" pr 7 -n 2>/dev/null | tail -1)"
+  assert_eq "$out" "$wp" "pr -n — 워크트리 경로 출력"
+  assert_eq "$(git -C "$wp" rev-parse HEAD 2>/dev/null)" "$sha" "pr — HEAD가 PR 커밋"
+  assert_eq "$(git -C "$wp" branch --show-current 2>/dev/null)" "pr-7" "pr — pr-7 브랜치"
+  # 재실행: 체크아웃된 pr-7은 fetch로 못 바꾸므로 fetch 없이 기존 워크트리를 연다
+  out="$(CW_OPEN_CMD='printf "%s|"' cw_run "$r" pr 7 -y -- "리뷰해" 2>/dev/null | tail -1)"
+  assert_eq "$out" "리뷰해|" "pr 재실행 — 기존 워크트리에서 -- 인자 전달"
+  out="$(cw_run "$r" pr 8 -n 2>&1)" || rc=$?
+  assert_exit 1 "$rc" "pr 없는 번호 — exit 1"
+  assert_contains "$out" "refs/pull/8/head 없음" "pr 없는 번호 — 에러 메시지"
+  rc=0
+  cw_run "$r" pr abc -n >/dev/null 2>&1 || rc=$?
+  assert_exit 1 "$rc" "pr 숫자 아닌 번호 — exit 1"
+  rc=0
+  cw_run "$r" pr 7 -d >/dev/null 2>&1 || rc=$?
+  assert_exit 1 "$rc" "pr -d 등 add 전용 옵션 — exit 1"
+  out="$(PATH="$SCRIPT_DIR:$PATH" HOME="$r" bash -c \
+    'eval "$(cw completion bash)"; COMP_WORDS=(cw pr); COMP_CWORD=1; _cw; printf "%s\n" "${COMPREPLY[@]}"')"
+  assert_eq "$out" "pr"$'\n'"prune" "completion — pr 명령 후보"
+}
+
+# [보안] PR은 신뢰할 수 없는 코드 — init hook·에이전트 실행은 항상 확인 (-y로 생략, stdin EOF면 실행 안 함)
+t_pr_confirm() {
+  local r="$1" bare="$1/.remote.git" out
+  git init -q --bare "$bare"
+  git -C "$r" remote add origin "$bare"
+  git -C "$r" push -q origin HEAD:refs/pull/9/head
+  git -C "$r" push -q origin HEAD:refs/pull/10/head
+  # cw_run의 HOME=$r → INIT_HOOK=$r/.claude/worktree-init.sh
+  mkdir -p "$r/.claude"
+  printf '#!/bin/sh\ntouch "$1/.hooked"\n' > "$r/.claude/worktree-init.sh"
+  chmod +x "$r/.claude/worktree-init.sh"
+  # 메인의 post-checkout(npm install 등)은 새 워크트리에서 돈다 — 동의 없으면 이것도 생략
+  mkdir -p "$r/hooks"
+  printf '#!/bin/sh\ntouch .checkout-hooked\n' > "$r/hooks/post-checkout"
+  chmod +x "$r/hooks/post-checkout"
+  git -C "$r" config core.hooksPath "$r/hooks"
+  out="$(CW_OPEN_CMD='printf "%s|" launched' cw_run "$r" pr 9 </dev/null 2>&1)"
+  assert_contains "$out" "신뢰할 수 없음" "[보안] pr — 실행 전 경고"
+  assert_not_contains "$out" "launched|" "[보안] pr — stdin 없으면 에이전트 실행 안 함"
+  assert_dir_exists "$r/.claude/worktrees/pr-9" "pr — 실행 거부해도 워크트리는 생성"
+  if [ ! -e "$r/.claude/worktrees/pr-9/.hooked" ]; then pass "[보안] pr — 거부하면 init hook도 생략"
+  else fail "[보안] pr — 거부했는데 init hook 실행됨"; fi
+  if [ ! -e "$r/.claude/worktrees/pr-9/.checkout-hooked" ]; then pass "[보안] pr — 거부하면 post-checkout hook도 생략"
+  else fail "[보안] pr — 거부했는데 post-checkout hook 실행됨"; fi
+  cw_run "$r" pr 10 -n -y >/dev/null 2>&1
+  if [ -e "$r/.claude/worktrees/pr-10/.hooked" ] && [ -e "$r/.claude/worktrees/pr-10/.checkout-hooked" ]; then
+    pass "pr -y — init hook·post-checkout hook 실행"
+  else fail "pr -y — hook 미실행"; fi
+  out="$(printf 'y\n' | CW_OPEN_CMD='printf "%s|" launched' cw_run "$r" pr 9 2>&1 | tail -1)"
+  assert_eq "$out" "launched|" "pr — y 응답이면 실행"
+  out="$(CW_OPEN_CMD='printf "%s|" launched' cw_run "$r" pr 9 -y </dev/null 2>&1)"
+  assert_not_contains "$out" "실행할까요" "pr -y — 확인 생략"
+  assert_eq "$(printf '%s' "$out" | tail -1)" "launched|" "pr -y — 바로 실행"
+}
+
 # 자동완성: __names가 이름 후보를, completion이 셸 스크립트를 출력
 t_completion() {
   local r="$1" out rc=0 names
@@ -1164,6 +1231,8 @@ run_test "path"                         t_path
 run_test "path 없는 이름"               t_path_nonexistent
 run_test "CW_OPEN_CMD"                  t_open_cmd_env
 run_test "add/open -- 에이전트 인자"    t_open_cmd_args
+run_test "pr 워크트리"                  t_pr_worktree
+run_test "[보안] pr 실행 전 확인"     t_pr_confirm
 run_test "자동완성"                     t_completion
 run_test "lock + unlock"                t_lock_unlock
 run_test "lock이 remove 차단"           t_lock_blocks_remove

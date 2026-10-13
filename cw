@@ -65,6 +65,8 @@ ${C_BOLD}cw — Claude Worktree${C_RESET} ${C_DIM}v${CW_VERSION}${C_RESET}
 ${C_BOLD}Commands:${C_RESET}
   ${C_CYAN}add${C_RESET} <folder> [branch] [base] [옵션] [-- <args>]
                                   워크트리 생성 후 claude 실행 (-- 뒤 인자는 claude에 전달)
+  ${C_CYAN}pr${C_RESET} <번호> [-n] [-l] [-y] [-- <args>]
+                                  GitHub PR 헤드를 pr-<번호> 워크트리로 받아 claude 실행 (gh 불필요, 실행 전 확인, -y로 생략)
   ${C_CYAN}open${C_RESET} <name> [-- <args>]        기존 워크트리에서 claude 실행
   ${C_CYAN}path${C_RESET} <name>                    워크트리 경로 출력 (claude 실행 X)
   ${C_CYAN}list${C_RESET} [옵션]                  워크트리 목록 (TTY: 대화형 선택)
@@ -98,6 +100,7 @@ ${C_BOLD}Examples:${C_RESET}
   cw add hotfix -d main
   cw add feature -Fn
   cw add fix-x -- "이 버그 고쳐"   # 첫 프롬프트로 시작
+  cw pr 123 -- "이 PR 리뷰해줘"
   cw open BMSQUARE-16512
   cw open BMSQUARE-16512 -- "리뷰 이어서 해줘"
   cw path BMSQUARE-16512
@@ -322,7 +325,7 @@ is_protected_branch() {
 
 cmd_add() {
   local -a positional=() opts=() agent_args=() args=()
-  local opt_lock=0 opt_detach=0 opt_fetch=0 opt_no_open=0
+  local opt_lock=0 opt_detach=0 opt_fetch=0 opt_no_open=0 opt_untrusted=0
 
   # -- 뒤는 에이전트 인자 — 옵션 확장(-pq → -p -q)·줄 단위 read를 거치면 깨지므로 먼저 떼어 둠
   while [ $# -gt 0 ] && [ "$1" != "--" ]; do opts+=("$1"); shift; done
@@ -339,6 +342,7 @@ cmd_add() {
       -d|--detach)     opt_detach=1; shift ;;
       -F|--fetch)      opt_fetch=1; shift ;;
       -n|--no-open)    opt_no_open=1; shift ;;
+      --untrusted)     opt_untrusted=1; shift ;;  # cw pr 내부용: 사용자 hook 생략
       -*)              err "알 수 없는 옵션: $1"; exit 1 ;;
       *)               positional+=("$1"); shift ;;
     esac
@@ -396,12 +400,16 @@ cmd_add() {
     warn "extensions.worktreeConfig를 켤 수 없음 (bare 레포 등) — hooksPath 차단 생략"
   fi
 
+  # --untrusted: 신뢰할 수 없는 코드(PR)에서 사용자 hook(post-checkout의 npm install 등)이 돌지 않게 생성 중 hook도 끔
+  local -a git_add=(git)
+  [ "$opt_untrusted" -eq 0 ] || git_add=(git -c core.hooksPath=/dev/null)
+
   info "워크트리 생성: ${C_BOLD}${wpath}${C_RESET}"
 
   if [ "$opt_detach" -eq 1 ]; then
     echo "  ${C_DIM}모드:${C_RESET} ${C_YELLOW}detached HEAD${C_RESET}"
     echo "  ${C_DIM}베이스:${C_RESET} ${C_CYAN}${base}${C_RESET}"
-    git worktree add --detach "$wpath" "$base" || { err "워크트리 생성 실패"; exit 1; }
+    "${git_add[@]}" worktree add --detach "$wpath" "$base" || { err "워크트리 생성 실패"; exit 1; }
   else
     echo "  ${C_DIM}브랜치:${C_RESET} ${C_CYAN}${branch}${C_RESET}"
 
@@ -410,10 +418,10 @@ cmd_add() {
       if [ -n "$base_arg" ]; then
         warn "base=${C_CYAN}${base_arg}${C_RESET} 인자 무시됨 (기존 브랜치 사용)"
       fi
-      git worktree add "$wpath" "$branch" || { err "워크트리 생성 실패"; exit 1; }
+      "${git_add[@]}" worktree add "$wpath" "$branch" || { err "워크트리 생성 실패"; exit 1; }
     else
       echo "  ${C_DIM}베이스:${C_RESET} ${C_CYAN}${base}${C_RESET}"
-      git worktree add "$wpath" -b "$branch" "$base" || { err "워크트리 생성 실패"; exit 1; }
+      "${git_add[@]}" worktree add "$wpath" -b "$branch" "$base" || { err "워크트리 생성 실패"; exit 1; }
     fi
   fi
 
@@ -445,7 +453,7 @@ cmd_add() {
     ok ".worktreeinclude: 파일 ${copied}개 복사"
   fi
 
-  if [ -x "$INIT_HOOK" ]; then
+  if [ -x "$INIT_HOOK" ] && [ "$opt_untrusted" -eq 0 ]; then
     info "init hook 실행: ${C_DIM}${INIT_HOOK}${C_RESET}"
     "$INIT_HOOK" "$wpath" || warn "init hook 실패 (계속 진행)"
   fi
@@ -458,6 +466,46 @@ cmd_add() {
   fi
 
   launch_agent "$wpath" "${agent_args[@]+"${agent_args[@]}"}"
+}
+
+# GitHub PR 헤드를 pr-<N> 워크트리로. refs/pull/<N>/head는 GitHub가 모든 PR에 주는 참조라 gh 불필요.
+# 생성·hooksPath·잠금·init hook은 cmd_add 한 경로로
+cmd_pr() {
+  local num="${1:-}" opt_yes=0 opt_no_open=0 ans="n" usage="Usage: cw pr <번호> [-n] [-l] [-y] [-- <args>]"
+  local -a pass=()
+  [[ "$num" =~ ^[0-9]+$ ]] || { err "$usage"; exit 1; }
+  shift
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do
+    case "$1" in
+      -n|--no-open) opt_no_open=1; pass+=(-n) ;;
+      -l|--lock)    pass+=(-l) ;;
+      -y|--yes)     opt_yes=1 ;;
+      *)            err "$usage"; exit 1 ;;
+    esac
+    shift
+  done
+  require_repo
+  # 이미 있으면 fetch 없이 연다 — 체크아웃된 pr-<N>은 fetch로 갱신할 수 없음
+  if ! resolve_managed_worktree "pr-${num}"; then
+    info "origin에서 PR #${num} 가져오는 중..."
+    git fetch -q origin "+refs/pull/${num}/head:pr-${num}" \
+      || { err "origin에 refs/pull/${num}/head 없음 (GitHub 원격인지 확인)"; exit 1; }
+  fi
+  # 포크 PR은 신뢰할 수 없는 코드: PR의 .claude 훅·.mcp.json·CLAUDE.md(@import 포함)는 에이전트를 띄우는 것만으로
+  # 명령 실행·지시 주입이 가능하고, 파일 목록 검사는 대소문자·import로 우회됨 → 실행은 항상 확인 (-y 생략, stdin EOF면 실행 안 함)
+  if [ "$opt_no_open" -eq 0 ] && [ "$opt_yes" -eq 0 ]; then
+    warn "PR 코드는 신뢰할 수 없음 — git·init hook과 PR의 훅·MCP 설정·CLAUDE.md가 실행될 수 있음"
+    printf '%s' "${C_BOLD}pr-${num}에서 hook·${CW_OPEN_CMD%% *} 실행할까요?${C_RESET} ${C_DIM}[y/N]${C_RESET} "
+    IFS= read -r ans || ans="n"
+    echo ""
+    case "$ans" in y|Y|yes|YES) opt_yes=1 ;; esac
+  fi
+  if [ "$opt_yes" -eq 0 ]; then
+    # 동의 없으면 PR 코드를 실행할 수 있는 init hook·post-checkout hook(npm install 등)도 생략
+    pass+=(-n --untrusted)
+    info "실행 생략 (hook·에이전트) — 확인 후 ${C_CYAN}cw open pr-${num}${C_RESET}"
+  fi
+  cmd_add "pr-${num}" "pr-${num}" "${pass[@]+"${pass[@]}"}" "$@"
 }
 
 _tty_saved=""
@@ -1380,7 +1428,7 @@ cmd_prune() {
 
 # 자동완성 스크립트 출력. 이름 후보는 숨은 서브커맨드 `cw __names`가 런타임에 제공.
 cmd_completion() {
-  local cmds="add list open path cd cursor name remove clean lock unlock move prune repair help completion"
+  local cmds="add pr list open path cd cursor name remove clean lock unlock move prune repair help completion"
   local named="open path cd cursor name remove lock unlock move"
   case "${1:-}" in
     zsh|bash) ;;
@@ -1428,6 +1476,7 @@ cmd_repair() {
 
 case "${1:-help}" in
   add)    shift; cmd_add "$@" ;;
+  pr)     shift; cmd_pr "$@" ;;
   list)   shift; cmd_list "$@" ;;
   open)   shift; cmd_open "$@" ;;
   path)   shift; cmd_path "$@" ;;

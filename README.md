@@ -30,6 +30,7 @@
 |---|---|---|---|
 | `.claude/worktrees/` 경로 자동 | ❌ | ✅ | ✅ |
 | 브랜치명 직접 지정 | ✅ | ❌ | ✅ |
+| PR 번호로 워크트리 (`cw pr 123`) | ❌ | ❌ | ✅ |
 | 베이스 브랜치 선택 | ✅ | ❌ | ✅ |
 | 생성 후 claude 자동 실행 | ❌ | ✅ | ✅ |
 | 머지 기반 일괄 정리 | ❌ | ❌ | ✅ |
@@ -93,6 +94,17 @@ cw add setup -n                                       # 생성만, claude 실행
 cw add x -Fn                                          # 번들: fetch + no-open
 cw add fix-x -- "이 버그 고쳐"                        # -- 뒤 인자는 claude에 그대로 전달 (첫 프롬프트로 시작)
 ```
+
+### GitHub PR 리뷰
+```bash
+cw pr 123                                 # origin의 PR #123 헤드를 pr-123 브랜치 워크트리로 받아 claude 실행
+cw pr 123 -n                              # 생성만 (경로 출력)
+cw pr 123 -y -- "이 PR 리뷰해줘"          # 확인 없이 첫 프롬프트로 시작 (믿을 수 있는 PR)
+```
+
+`refs/pull/<번호>/head`(GitHub가 모든 PR에 주는 참조)를 `git fetch`로 받으므로 `gh` CLI가 필요 없습니다. 이미 `pr-<번호>` 워크트리가 있으면 fetch 없이 엽니다. 옵션은 `-n`·`-l`·`-y`만 받고 묶어 쓰지 않습니다.
+
+PR 코드는 신뢰할 수 없는 것으로 보고, hook(git post-checkout·init hook)과 claude를 실행하기 전에 항상 `[y/N]`으로 확인합니다. 거절하거나 stdin이 없거나 `-n`이면 아무것도 실행하지 않습니다. 포크 PR의 `.claude` 훅·`.mcp.json`·`CLAUDE.md`는 에이전트를 띄우는 것만으로, hook의 `npm install` 등은 PR의 스크립트로 명령을 실행할 수 있기 때문입니다. 내 PR처럼 믿을 수 있으면 `-y`로 확인을 건너뜁니다.
 
 ### 기존 워크트리 접근
 ```bash
@@ -169,12 +181,12 @@ cw repair                        # 레포 이동 후 워크트리 링크 복구
 
 | 축약 | 전체 | 대상 명령 | 의미 |
 |---|---|---|---|
-| `-l` | `--lock` | add | 생성 즉시 잠금 |
+| `-l` | `--lock` | add, pr | 생성 즉시 잠금 |
 | `-d` | `--detach` | add | detached HEAD 체크아웃 |
 | `-F` | `--fetch` | add, clean | add: 생성 전 `git fetch origin` / clean: `git fetch origin --prune` 후 `origin/<기준>`으로 판정 (기준 명시 시 그대로, fetch 실패 시 로컬 기준) |
-| `-n` | `--no-open` | add | claude 실행 생략 |
+| `-n` | `--no-open` | add, pr | claude 실행 생략 |
 | `-f` | `--force` | remove | 더티 상태 무시 |
-| `-y` | `--yes` | clean | 삭제 전 확인 생략 |
+| `-y` | `--yes` | clean, pr | clean: 삭제 전 확인 생략 / pr: claude 실행 전 확인 생략 |
 
 번들링 지원: `cw add foo -dFn main` = `cw add foo --detach --fetch --no-open main`
 
