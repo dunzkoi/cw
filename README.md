@@ -91,11 +91,13 @@ cw add urgent -l                                      # 생성 즉시 잠금
 cw add exp -F                                         # fetch 선행
 cw add setup -n                                       # 생성만, claude 실행 X
 cw add x -Fn                                          # 번들: fetch + no-open
+cw add fix-x -- "이 버그 고쳐"                        # -- 뒤 인자는 claude에 그대로 전달 (첫 프롬프트로 시작)
 ```
 
 ### 기존 워크트리 접근
 ```bash
 cw open my-feature       # claude 실행
+cw open my-feature -- "리뷰 이어서 해줘"   # -- 뒤 인자를 claude에 전달
 cw path my-feature       # 경로 출력 + 클립보드 복사
 ```
 
@@ -228,7 +230,7 @@ WT="$1"
 4. `--lock` 시 즉시 잠금
 5. `.worktreeinclude`에 맞는 gitignore 파일 복사
 6. `~/.claude/worktree-init.sh` 실행
-7. `--no-open` 아니면 `cd` + `exec $CW_OPEN_CMD` (기본 `claude --dangerously-skip-permissions`)
+7. `--no-open` 아니면 `cd` + `exec $CW_OPEN_CMD [-- 뒤 인자]` (기본 `claude --dangerously-skip-permissions`)
 
 ### `cw clean`
 1. 메인 워크트리의 현재 브랜치를 기준으로 선정 (override: `cw clean <base>`, `-F`면 fetch 후 `origin/<기준>`)

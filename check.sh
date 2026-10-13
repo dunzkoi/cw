@@ -413,6 +413,23 @@ t_open_cmd_env() {
   assert_exit 1 "$rc" "CW_OPEN_CMD — 없는 명령이면 exit 1"
 }
 
+# -- 뒤 인자를 에이전트에 그대로 전달 (첫 프롬프트). 공백·개행·-pq 같은 인자도 한 덩어리로
+t_open_cmd_args() {
+  local r="$1" stub="$1/stub.sh" out rc=0
+  printf '#!/bin/sh\nfor a; do printf "%%s|" "$a"; done\n' > "$stub"
+  chmod +x "$stub"
+  out="$(CW_OPEN_CMD="$stub --flag" cw_run "$r" add ag -- -pq "fix the bug" 2>/dev/null | tail -1)"
+  assert_eq "$out" "--flag|-pq|fix the bug|" "add -- — 새 워크트리에서 인자 전달"
+  out="$(CW_OPEN_CMD="$stub" cw_run "$r" add ag -- "이 버그 고쳐" 2>/dev/null | tail -1)"
+  assert_eq "$out" "이 버그 고쳐|" "add -- — 기존 워크트리에서 인자 전달"
+  out="$(CW_OPEN_CMD="$stub" cw_run "$r" open ag -- "a b" $'c\nd' 2>/dev/null)"
+  assert_eq "$out" "a b|c"$'\n'"d|" "open -- — 공백·개행 인자 전달"
+  out="$(CW_OPEN_CMD="$stub" cw_run "$r" open ag 2>/dev/null)"
+  assert_eq "$out" "" "open — 인자 없으면 빈 인자도 안 넘김"
+  CW_OPEN_CMD="$stub" cw_run "$r" open ag extra >/dev/null 2>&1 || rc=$?
+  assert_exit 1 "$rc" "open — -- 없는 추가 인자는 거부"
+}
+
 # 자동완성: __names가 이름 후보를, completion이 셸 스크립트를 출력
 t_completion() {
   local r="$1" out rc=0 names
@@ -1146,6 +1163,7 @@ run_test "name + 클립보드"              t_name_worktrees_base
 run_test "path"                         t_path
 run_test "path 없는 이름"               t_path_nonexistent
 run_test "CW_OPEN_CMD"                  t_open_cmd_env
+run_test "add/open -- 에이전트 인자"    t_open_cmd_args
 run_test "자동완성"                     t_completion
 run_test "lock + unlock"                t_lock_unlock
 run_test "lock이 remove 차단"           t_lock_blocks_remove

@@ -63,9 +63,9 @@ help() {
 ${C_BOLD}cw — Claude Worktree${C_RESET} ${C_DIM}v${CW_VERSION}${C_RESET}
 
 ${C_BOLD}Commands:${C_RESET}
-  ${C_CYAN}add${C_RESET} <folder> [branch] [base] [옵션]
-                                  워크트리 생성 후 claude 실행
-  ${C_CYAN}open${C_RESET} <name>                    기존 워크트리에서 claude 실행
+  ${C_CYAN}add${C_RESET} <folder> [branch] [base] [옵션] [-- <args>]
+                                  워크트리 생성 후 claude 실행 (-- 뒤 인자는 claude에 전달)
+  ${C_CYAN}open${C_RESET} <name> [-- <args>]        기존 워크트리에서 claude 실행
   ${C_CYAN}path${C_RESET} <name>                    워크트리 경로 출력 (claude 실행 X)
   ${C_CYAN}list${C_RESET} [옵션]                  워크트리 목록 (TTY: 대화형 선택)
   ${C_CYAN}cd${C_RESET} <name>                      cd 명령 출력 (eval "\$(cw cd <name>)")
@@ -97,7 +97,9 @@ ${C_BOLD}Examples:${C_RESET}
   cw add BMSQUARE-16512 feature/BMSQUARE-16512 main -l
   cw add hotfix -d main
   cw add feature -Fn
+  cw add fix-x -- "이 버그 고쳐"   # 첫 프롬프트로 시작
   cw open BMSQUARE-16512
+  cw open BMSQUARE-16512 -- "리뷰 이어서 해줘"
   cw path BMSQUARE-16512
   cw cursor BMSQUARE-16512
   cw name BMSQUARE-16512
@@ -223,9 +225,13 @@ require_open_cmd() {
 }
 
 # 워크트리로 cd 후 CW_OPEN_CMD exec. eval: 사용자가 쓴 따옴표·인자를 셸 문법대로 해석
+# 나머지 인자(add/open의 -- 뒤, 첫 프롬프트 등)는 %q로 감싸 한 덩어리씩 그대로 전달
 launch_agent() {
   cd "$1"
-  eval "exec ${CW_OPEN_CMD}"
+  shift
+  local extra=""
+  [ $# -eq 0 ] || extra="$(printf ' %q' "$@")"
+  eval "exec ${CW_OPEN_CMD}${extra}"
 }
 
 require_worktree() {
@@ -315,12 +321,17 @@ is_protected_branch() {
 }
 
 cmd_add() {
-  local -a positional=()
+  local -a positional=() opts=() agent_args=() args=()
   local opt_lock=0 opt_detach=0 opt_fetch=0 opt_no_open=0
 
-  local -a args=()
-  while IFS= read -r a; do args+=("$a"); done < <(expand_short_opts "$@")
-  set -- "${args[@]}"
+  # -- 뒤는 에이전트 인자 — 옵션 확장(-pq → -p -q)·줄 단위 read를 거치면 깨지므로 먼저 떼어 둠
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do opts+=("$1"); shift; done
+  if [ $# -gt 0 ]; then shift; agent_args=("$@"); fi
+
+  if [ ${#opts[@]} -gt 0 ]; then
+    while IFS= read -r a; do args+=("$a"); done < <(expand_short_opts "${opts[@]}")
+  fi
+  set -- "${args[@]+"${args[@]}"}"
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -328,13 +339,12 @@ cmd_add() {
       -d|--detach)     opt_detach=1; shift ;;
       -F|--fetch)      opt_fetch=1; shift ;;
       -n|--no-open)    opt_no_open=1; shift ;;
-      --)              shift; break ;;
       -*)              err "알 수 없는 옵션: $1"; exit 1 ;;
       *)               positional+=("$1"); shift ;;
     esac
   done
 
-  if [ ${#positional[@]} -lt 1 ]; then err "Usage: cw add <folder> [branch] [base] [옵션]"; exit 1; fi
+  if [ ${#positional[@]} -lt 1 ]; then err "Usage: cw add <folder> [branch] [base] [옵션] [-- <args>]"; exit 1; fi
   require_repo
 
   local name="${positional[0]}"
@@ -362,7 +372,7 @@ cmd_add() {
     fi
     require_open_cmd
     info "기존 워크트리에서 ${CW_OPEN_CMD%% *} 실행"
-    launch_agent "$wpath"
+    launch_agent "$wpath" "${agent_args[@]+"${agent_args[@]}"}"
   fi
 
   [ "$opt_no_open" -eq 1 ] || require_open_cmd
@@ -447,7 +457,7 @@ cmd_add() {
     exit 0
   fi
 
-  launch_agent "$wpath"
+  launch_agent "$wpath" "${agent_args[@]+"${agent_args[@]}"}"
 }
 
 _tty_saved=""
@@ -862,13 +872,14 @@ cmd_name() {
 }
 
 cmd_open() {
-  if [ $# -gt 1 ]; then
-    err "open은 옵션을 받지 않아. 경로만 필요하면 'cw path <name>' 사용"
+  if [ $# -gt 1 ] && [ "$2" != "--" ]; then
+    err "open은 옵션을 받지 않아. 경로만 필요하면 'cw path <name>', 에이전트 인자는 'cw open <name> -- <args>'"
     exit 1
   fi
-  require_named open "$@"
+  require_named open "${@:1:1}"
   require_open_cmd
-  launch_agent "$RESOLVED_PATH"
+  shift "$(( $# > 1 ? 2 : 1 ))"
+  launch_agent "$RESOLVED_PATH" "$@"
 }
 
 cmd_path() {
